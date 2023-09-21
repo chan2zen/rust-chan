@@ -1,0 +1,16 @@
+[package]
+name = "rust-chan"
+version = "0.1.0"
+edition = "2021"
+#target = "i686-pc-windows-msvc"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+#winapi = { version = "0.3.8", features = ["consoleapi", "minwindef"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
