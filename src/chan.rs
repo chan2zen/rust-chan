@@ -738,7 +738,7 @@ impl Segmenter {
                     }
                     // 中枢扩展判定和处理
                     if pivot_len > 1 {
-                        // check_pivot_extension(&mut pivots, &mut pivot_len);
+                        check_pivot_extension(&mut pivots, &mut pivot_len);
                     }
                 }
                 if pivot_len > 1 && seg_end.is_some() {
