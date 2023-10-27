@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::prelude::*;
 
 pub fn log(msg: &str) {
-    let mut file = File::create("c:/tdx/chan_log.txt").unwrap();
+    let mut file = File::create("c:/tdx/demo.txt").unwrap();
     file.write_all(msg.as_bytes()).unwrap();
 }
 
@@ -295,11 +295,19 @@ impl Stroke {
     }
 
     fn finish_reverse_segment(&self, first: &Stroke, second: &Stroke, last: &Stroke) -> bool {
-        if last.from != second.from && last.to != second.to && last.trend == second.trend {
-            if self.trend.advance() {
-                return second.low.min(last.low) < self.low.max(first.low)
+        if last.from != second.from && last.to != second.to {
+            if last.trend == second.trend {
+                if self.trend.advance() {
+                    return second.low.min(last.low) < self.low.max(first.low)
+                } else {
+                    return second.high.max(last.high) > self.high.min(first.high)
+                }
             } else {
-                return second.high.max(last.high) > self.high.min(first.high)
+                if self.trend.advance() {
+                    return second.high.max(last.high) > self.high.max(first.high);
+                } else {
+                    return second.low.min(last.low) < self.low.min(first.low);
+                }
             }
         }
         false
