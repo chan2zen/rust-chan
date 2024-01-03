@@ -295,22 +295,7 @@ impl Stroke {
     }
 
     fn finish_reverse_segment(&self, first: &Stroke, second: &Stroke, last: &Stroke) -> bool {
-        if last.from != second.from && last.to != second.to {
-            if last.trend == second.trend {
-                if self.trend.advance() {
-                    return second.low.min(last.low) < self.low.max(first.low)
-                } else {
-                    return second.high.max(last.high) > self.high.min(first.high)
-                }
-            } else {
-                if self.trend.advance() {
-                    return second.high.max(last.high) > self.high.max(first.high);
-                } else {
-                    return second.low.min(last.low) < self.low.min(first.low);
-                }
-            }
-        }
-        false
+        second.low.min(last.low) < self.low.max(first.low) || second.high.max(last.high) > self.high.min(first.high)
     }
 }
 
