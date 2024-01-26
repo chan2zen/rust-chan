@@ -77,20 +77,8 @@ pub unsafe extern "C" fn FindBiPoles(count: c_int, out: *mut c_float, high: *mut
         if pole.index >= last_index && pole.count < 5 {
             continue;
         }
-        let mut frac_index = pole.index as isize;
-        loop {
-            let curr_value = if pole.frac == 1 {
-                *high.offset(frac_index)
-            } else {
-                *low.offset(frac_index)
-            };
-            if curr_value == pole.value || frac_index == 0 {
-                *out.offset(frac_index as isize) = pole.frac as c_float;
-                break;
-            } else {
-                frac_index -= 1;
-            }
-        }
+        let frac_index = pole.index as isize;
+        *out.offset(frac_index as isize) = pole.frac as c_float;
     }
 
 }
@@ -218,7 +206,7 @@ fn get_pivots(count: i32, frac: *mut f32, low: *mut f32, high: *mut f32) -> Vec<
     pivots
 }
 
-fn find_1buy(count: i32, frac: *mut f32, low: *mut f32, high: *mut f32, bi: bool, debug: bool) -> HashMap<usize, Deal> {
+fn find_deal_points(count: i32, frac: *mut f32, low: *mut f32, high: *mut f32, bi: bool, debug: bool) -> HashMap<usize, Deal> {
     let mut strokes = build_strokes_from_frac(count, frac, low, high);
         
     let mut handler = Segmenter::new();
@@ -259,7 +247,7 @@ pub unsafe extern "C" fn FindPivotLow(count: c_int, out: *mut c_float, frac: *mu
 
 #[no_mangle]
 pub unsafe extern "C" fn FindStroke1Buy(count: c_int, out: *mut c_float, frac: *mut c_float, high: *mut c_float, low: *mut c_float) {
-    let deal_points = find_1buy(count, frac, low, high, true, false);
+    let deal_points = find_deal_points(count, frac, low, high, true, false);
 
     for (index, deal) in deal_points {
         *out.offset(index as isize) = deal.value()
@@ -268,7 +256,7 @@ pub unsafe extern "C" fn FindStroke1Buy(count: c_int, out: *mut c_float, frac: *
 
 #[no_mangle]
 pub unsafe extern "C" fn FindSeg1Buy(count: c_int, out: *mut c_float, frac: *mut c_float, high: *mut c_float, low: *mut c_float) {
-    let deal_points = find_1buy(count, frac, low, high, false, false);
+    let deal_points = find_deal_points(count, frac, low, high, false, false);
 
     for (index, deal) in deal_points {
         *out.offset(index as isize) = deal.value()
@@ -277,7 +265,7 @@ pub unsafe extern "C" fn FindSeg1Buy(count: c_int, out: *mut c_float, frac: *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn LogStrokes(count: c_int, out: *mut c_float, frac: *mut c_float, high: *mut c_float, low: *mut c_float) {
-    let deal_points = find_1buy(count, frac, low, high, false, true);
+    let deal_points = find_deal_points(count, frac, low, high, false, true);
 
     for (index, deal) in deal_points {
         *out.offset(index as isize) = deal.value()
