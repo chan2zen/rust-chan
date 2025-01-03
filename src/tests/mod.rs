@@ -1,0 +1,28 @@
+use crate::market::{Pole, STEPS, Edge};
+
+macro_rules! create_market {
+    ($cnt:expr, [$($high_vals:expr),*], [$($low_vals:expr),*]) => {
+        {
+            let mut high = vec![$($high_vals),*];
+            let mut low = vec![$($low_vals),*];
+            Market::new($cnt, high.as_mut_ptr(), low.as_mut_ptr())
+        }
+    };
+}
+
+fn to_poles(pole_values: &[f32]) -> Vec<Pole> {
+    let mut poles = Vec::with_capacity(pole_values.len());
+    let mut edge = Edge::TROUGH;
+    for i in 0..pole_values.len() {
+        if i == 0 && pole_values[i] > pole_values[i + 1] {
+            edge = Edge::PEAK;
+        }
+        poles.push(Pole::new(i * STEPS, edge, pole_values[i], false));
+        edge = edge.oppsite();
+    }
+    poles
+}
+
+mod market_tests;
+mod forest_tests;
+mod pivot_tests;
