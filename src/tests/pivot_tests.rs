@@ -17,6 +17,7 @@ fn assert_forest_eq(expected: State, segmented: &[usize], pole_values: &[f32]) {
     for p in pivots {
         println!("pivot: {}-{}, high:{}, low:{}", p.start(), p.end(), p.high(), p.low());
     }
+    let segmented = if segmented.len() < 3 { &[] } else { &segmented[0..&segmented.len()-1] };
     assert_eq!(segmented.iter().map(|s| *s * STEPS).collect::<std::collections::HashSet<usize>>(), indexes);
     assert_eq!(expected, forest.state());
 }

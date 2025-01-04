@@ -43,7 +43,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
         let value = if *mode == 2. {
             pole.value
         } else {
-            pole.edge.value() as c_float * if pole.segmented { 100. } else { 1. }
+            pole.edge as isize as c_float * if pole.segmented { 100. } else { 1. }
         };
         *pfOUT.offset(pole.index as isize) = value;
     }

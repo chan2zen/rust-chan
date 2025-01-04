@@ -75,8 +75,8 @@ impl Stroke {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Edge {
-    PEAK,
-    TROUGH,
+    PEAK = 1,
+    TROUGH = -1,
 }
 
 impl From<bool> for Edge {
@@ -90,19 +90,13 @@ impl From<bool> for Edge {
 }
 
 impl Edge {
-    pub fn value(&self) -> f32 {
-        match self {
-            Edge::PEAK => 1.,
-            Edge::TROUGH => -1.,
-        }
-    }
-    
     pub(crate) fn oppsite(&self) -> Edge {
         match self {
             Edge::PEAK => Edge::TROUGH,
             Edge::TROUGH => Edge::PEAK,
         }
     }
+
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -173,12 +167,38 @@ impl Pivot {
         self.poles[self.poles.len() - 1].index
     }
 
+    // 回落笔的 pole 极值，是否在中枢内
+    pub fn converge(&self, pole: &Pole) -> bool {
+        match pole.edge {
+            Edge::TROUGH => pole.value <= self.high(),
+            Edge::PEAK => pole.value >= self.low(),
+        }
+    }
     pub fn high(&self) -> f32 {
         self.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).min_by(f32::total_cmp).unwrap()
     }
 
     pub fn low(&self) -> f32 {
         self.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).max_by(f32::total_cmp).unwrap()
+    }
+    
+    fn overlap(&self, next: &Pivot) -> bool {
+        next.high() < self.low() && next.highest() >= self.lowest() 
+        || next.low() > self.high() && next.lowest() <= self.highest()
+    }
+    
+    fn merge(&mut self, next: Pivot) {
+        self.poles.extend(next.poles);
+    }
+    
+    fn highest(&self) -> f32 {
+        self.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).max_by(f32::total_cmp).unwrap()
+
+    }
+    
+    fn lowest(&self) -> f32 {
+        self.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).min_by(f32::total_cmp).unwrap()
+
     }
 }
 // 一个 N 需要 a, b, c, d 四个极值，最多需要三个 N
@@ -193,10 +213,11 @@ pub struct Forest {
     state: State,
     
     segmented_index: Vec<usize>,
+    merged_feature_poles: Vec<Pole>, // 存放被合并的反向特征序列极值，生成新段时清空
 }
 impl Forest {
     pub fn new() -> Self {
-        Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new() }
+        Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new() }
     }
 
     pub fn state(&self) -> State {
@@ -208,7 +229,7 @@ impl Forest {
         match self.state {
             State::None => {
                 if self.poles.len() >= N_POLE_SIZE {
-                    // TODO: 寻找 N 再开始
+                    // 寻找 N 再开始
                     if self.search_start_point() {
                         self.state = State::S0;
                     }
@@ -493,7 +514,8 @@ impl Forest {
     fn merge_n(&mut self, n: usize) {
         let from = (n - 1) * (N_POLE_SIZE - 1) + 1;
         let to = from + 2;
-        self.poles.drain(from..to);
+        let drain = self.poles.drain(from..to);
+        if n > 1 { self.merged_feature_poles.extend(drain ) };
     }
 
     pub fn indexes(&self) -> HashSet<usize> {
@@ -501,10 +523,10 @@ impl Forest {
         for idx in self.segmented_index.iter(){
             result.insert(*idx);
         }
-        if self.state != State::None {
-            result.insert(self.poles.first().unwrap().index);
-            result.insert(self.poles.get(N_POLE_SIZE - 1).unwrap().index);
-        }
+        // if self.state != State::None { // 中阴段，不添加
+        //     result.insert(self.poles.first().unwrap().index);
+        //     result.insert(self.poles.get(N_POLE_SIZE - 1).unwrap().index);
+        // }
         result
     }
     
@@ -521,9 +543,13 @@ impl Forest {
     // 将第一个 N 入段并移除
     fn push_segment(&mut self) {
         if let Some(pole) = self.poles.first() {
-            self.segmented_index.push(pole.index);
+            self.segmented_index.push(pole.index); // 段开始索引
             self.poles.drain(..N_POLE_SIZE-1);
+            if let Some(pole) = self.poles.first() {
+                self.segmented_index.push(pole.index); // 段结束索引
+            }
         }
+        self.merged_feature_poles.clear();
     }
     
     pub fn pivots(&self, poles: &Vec<Pole>) -> (HashMap<usize, Signal>, Vec<Pivot>) {
@@ -532,42 +558,15 @@ impl Forest {
         let mut signals = HashMap::new();
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
-            if pole.segmented {
-                if last_segmented_index == std::usize::MAX {
-                    last_segmented_index = index;
-                } else {
+            if pole.segmented || index == poles.len() - 1 {
+                if last_segmented_index != std::usize::MAX {
                     if (index - last_segmented_index) > N_POLE_SIZE {
                         let (inner_signals, pivots) = self.find_pivots(poles, last_segmented_index, index);
-                        if pivots.len() > 1 {
-                            let signal = match pole.edge {
-                                Edge::PEAK =>  Signal::SELL1 ,
-                                Edge::TROUGH =>  Signal::BUY1,
-                            };
-                            signals.insert(pole.index, signal);
-                            if (index + 2) < poles.len() {
-                                let pivot = pivots.last().unwrap();
-                                let pole = poles.get(index + 2).unwrap();
-                                let signal = match pole.edge {
-                                    Edge::PEAK =>  if pole.value < pivot.low() { Signal::SELL23 } else { Signal::SELL2 },
-                                    Edge::TROUGH => if pole.value > pivot.high() { Signal::BUY23 } else { Signal::BUY2 },
-                                };
-                                signals.insert(pole.index, signal);
-                            }
-                        } else if !pivots.is_empty() && (index + 1) < poles.len() {
-                            let pivot = pivots.last().unwrap();
-                            let pole = poles.get(index + 1).unwrap();
-                            if let Some(signal) = match pole.edge {
-                                Edge::PEAK => if pole.value < pivot.low() { Some(Signal::SELL3) } else { None },
-                                Edge::TROUGH =>  if pole.value > pivot.high() { Some(Signal::BUY3) } else { None },
-                            } {
-                                signals.insert(pole.index, signal);
-                            }
-                        }
                         signals.extend(inner_signals);
                         result.extend(pivots);
                     }
-                    last_segmented_index = index;
                 }
+                last_segmented_index = index;
             }
         }
         
@@ -578,30 +577,19 @@ impl Forest {
         let mut pivots : Vec<Pivot> = Vec::new();
         let mut i = last_segmented_index + 1;
         let mut signals = HashMap::new();
-        while (i + 3) < index {
-            let b = poles.get(i).unwrap();
-            let c = poles.get(i + 1);
-            let d = poles.get(i + 2);
-            let e = poles.get(i + 3);
-            if let (Some(c), Some(d), Some(e)) = (c, d, e) {
-                if match b.edge {
-                    Edge::PEAK => e.value <= b.value,
-                    Edge::TROUGH => e.value >= b.value,
-                } {
+        while (i + 3) <= index {
+            if let (Some(b), Some(c), Some(d), Some(e)) 
+            = (poles.get(i), poles.get(i + 1), poles.get(i + 2), poles.get(i + 3)) {
+                if !e.has_gap(b.value) {
                     let new_pivot = if let Some(last) = pivots.last_mut() {
-                        let min_high = last.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).min_by(f32::total_cmp).unwrap();
-                        let max_low = last.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).max_by(f32::total_cmp).unwrap();
-                        
-                        if match b.edge {
-                            Edge::PEAK => e.value <= min_high,
-                            Edge::TROUGH => e.value >= max_low,
-                        } {
+                        if last.converge(e) { // 中枢延申
                             last.poles.push(*d);
                             last.poles.push(*e);
                             false
-                        } else if b.index > last.poles.last().unwrap().index {
+                        } else if b.index > last.end() { // 新中枢
                             true
-                        } else {
+                        } else { // 三类买卖点
+                            signals.insert(e.index, e.signal3());
                             false
                         }
                     } else {
@@ -613,18 +601,46 @@ impl Forest {
                 } else if pivots.len() > 0 {
                     let pivot = pivots.last().unwrap();
                     if c.index == pivot.end() {
-                        let signal = match e.edge {
-                            Edge::TROUGH =>  Signal::BUY3 ,
-                            Edge::PEAK =>  Signal::SELL3,
-                        };
-                        signals.insert(e.index, signal);
+                        signals.insert(e.index, e.signal3());
                     }
 
                 }
             }
             i += 2;
         }
+        // 中枢扩展、扩张, todo!()
+        let mut i = 0;
+        while pivots.len() > 1 && i <= pivots.len() - 2 {
+            if let (Some(prev), Some(next)) = (pivots.get(i), pivots.get(i+1)) {
+                if prev.overlap(next) {
+                    let next = pivots.remove(i + 1);
+                    pivots.get_mut(i).unwrap().merge(next);
+                } else { i += 1; }
+            }
+        }
+        if pivots.len() > 1 {
+            let pole = poles.get(index).unwrap();
+            signals.insert(pole.index, pole.signal1());
+            if (index + 2) < poles.len() {
+                let pivot = pivots.last().unwrap();
+                let pole = poles.get(index + 2).unwrap();
+                signals.insert(pole.index, pole.signal2(pivot));
+            }
+        } 
+        if !pivots.is_empty() && (index + 1) < poles.len() {
+            let pivot = pivots.last().unwrap();
+            let pole = poles.get(index + 1).unwrap();
+
+            if let Some(signal) = pole.signal3_by(pivot){
+                signals.insert(pole.index, signal);
+            }
+        }
         (signals, pivots)
+    }
+    
+    // 返回中阴阶段被合并的 poles
+    fn intermediate(&self) -> &[Pole] {
+        &self.merged_feature_poles
     }
 
 }
@@ -661,6 +677,45 @@ impl Pole {
             segmented,
         }
     }
+
+    // 对于 N 线段，有极点 a,b,c,d,e, 使用极值 b 和 e(self) 判断两个特征笔之间是否有缺口
+    // return true if there is a gap, false if bc and be overlap with 
+    #[inline]
+    fn has_gap(&self, b: f32) -> bool {
+        match self.edge {
+            Edge::PEAK => self.value < b,
+            Edge::TROUGH => self.value > b,
+        }
+    }
+
+    fn signal3(&self) -> Signal {
+        match self.edge {
+            Edge::PEAK => Signal::SELL3,
+            Edge::TROUGH => Signal::BUY3,
+        }
+    }
+
+    fn signal3_by(&self, pivot:&Pivot) -> Option<Signal> {
+        match self.edge {
+            Edge::PEAK => if self.value < pivot.low() { Some(Signal::SELL3) } else { None },
+            Edge::TROUGH =>  if self.value > pivot.high() { Some(Signal::BUY3) } else { None },
+        }
+    }
+    
+    fn signal1(&self) -> Signal {
+        match self.edge {
+            Edge::PEAK =>  Signal::SELL1 ,
+            Edge::TROUGH =>  Signal::BUY1,
+        }
+    }
+    
+    fn signal2(&self, pivot:&Pivot) -> Signal {
+        match self.edge {
+            Edge::PEAK =>  if self.value < pivot.low() { Signal::SELL23 } else { Signal::SELL2 },
+            Edge::TROUGH => if self.value > pivot.high() { Signal::BUY23 } else { Signal::BUY2 },
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -888,8 +943,13 @@ impl Market<'_> {
         for pole in &spins {
             forest.step(pole);
         }
-
         let indexes = forest.indexes();
+        let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
+        let intermediate = forest.intermediate(); // 处于中阴状态的极点
+        spins.retain(|&pole | {
+            (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
+             || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
+        });
         for pole in spins.as_mut_slice() {
             if indexes.contains(&pole.index) {
                 (*pole).segmented = true;
