@@ -101,61 +101,62 @@ impl Edge {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum State {
-    None,
-    S0,
-    S1,
-    S11,
-    S12,
-    S121,
-    S122,
-    S1221,
-    S12211,
-    S122111,
-    S122112,
-    S122113,
-    S122114,
-    S12212,
-    S12213,
-    S12214,
-    S1222,
-    S12221,
-    S122211,
-    S122212,
-    S122213,
-    S122214,
-    S12222,
-    S12223,
-    S12224,
-    S1223,
-    S1224,
-    S123,
-    S1231,
-    S12311,
-    S12312,
-    S123121,
-    S123122,
-    S123123,
-    S123124,
-    S1232,
-    S12321,
-    S12322,
-    S123221,
-    S123222,
-    S123223,
-    S1233,
-    S1234,
-    S124,
-    S2,
-    S21,
-    S22,
-    S221,
-    S222,
-    S223,
+    None = 555,
+    S0 = 60,
+    S1 = 61,
+    S11 = 611,
+    S12 = 612,
+    S121 = 6121,
+    S122 = 6122,
+    S1221 = 61221,
+    S12211 = 612211,
+    S122111 = 6122111,
+    S122112 = 6122112,
+    S122113 = 6122113,
+    S122114 = 6122114,
+    S12212 = 612212,
+    S12213 = 612213,
+    S12214 = 612214,
+    S1222 = 61222,
+    S12221 = 612221,
+    S122211 = 6122211,
+    S122212 = 6122212,
+    S122213 = 6122213,
+    S122214 = 6122214,
+    S12222 = 612222,
+    S12223 = 612223,
+    S12224 = 612224,
+    S1223 = 61223,
+    S1224 = 61224,
+    S123 = 6123,
+    S1231 = 61231,
+    S12311 = 612311,
+    S12312 = 612312,
+    S123121 = 6123121,
+    S123122 = 6123122,
+    S123123 = 6123123,
+    S123124 = 6123124,
+    S1232 = 61232,
+    S12321 = 612321,
+    S12322 = 612322,
+    S123221 = 6123221,
+    S123222 = 6123222,
+    S123223 = 6123223,
+    S1233 = 61233,
+    S1234 = 61234,
+    S124 = 6124,
+    S2 = 62,
+    S21 = 621,
+    S22 = 622,
+    S221 = 6221,
+    S222 = 6222,
+    S223 = 6223,
 }
 
 #[derive(Debug)]
 pub struct Pivot {
     pub poles: Vec<Pole>,
+    pub extended: bool,
 }
 
 impl Pivot {
@@ -174,15 +175,17 @@ impl Pivot {
             Edge::PEAK => pole.value >= self.low(),
         }
     }
-    pub fn high(&self) -> f32 {
-        self.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).min_by(f32::total_cmp).unwrap()
-    }
 
+    // 中枢 ZG = min(g1, g2)，只需取前面四个极值进行判定
+    pub fn high(&self) -> f32 {
+        self.poles.iter().take(4).filter(|p| p.edge == Edge::PEAK).map(|p| p.value).min_by(f32::total_cmp).unwrap()
+    }
+    // 中枢 ZD = max(d1, d2)，只需取前面四个极值进行判定
     pub fn low(&self) -> f32 {
-        self.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).max_by(f32::total_cmp).unwrap()
+        self.poles.iter().take(4).filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).max_by(f32::total_cmp).unwrap()
     }
     
-    fn overlap(&self, next: &Pivot) -> bool {
+    fn extended(&self, next: &Pivot) -> bool {
         next.high() < self.low() && next.highest() >= self.lowest() 
         || next.low() > self.high() && next.lowest() <= self.highest()
     }
@@ -520,13 +523,7 @@ impl Forest {
 
     pub fn indexes(&self) -> HashSet<usize> {
         let mut result: HashSet<usize> = HashSet::with_capacity(self.segmented_index.len() + 2);
-        for idx in self.segmented_index.iter(){
-            result.insert(*idx);
-        }
-        // if self.state != State::None { // 中阴段，不添加
-        //     result.insert(self.poles.first().unwrap().index);
-        //     result.insert(self.poles.get(N_POLE_SIZE - 1).unwrap().index);
-        // }
+        result.extend(self.segmented_index.as_slice());
         result
     }
     
@@ -543,7 +540,9 @@ impl Forest {
     // 将第一个 N 入段并移除
     fn push_segment(&mut self) {
         if let Some(pole) = self.poles.first() {
-            self.segmented_index.push(pole.index); // 段开始索引
+            if self.segmented_index.is_empty() {
+                self.segmented_index.push(pole.index); // 段开始索引，避免首尾重复
+            }
             self.poles.drain(..N_POLE_SIZE-1);
             if let Some(pole) = self.poles.first() {
                 self.segmented_index.push(pole.index); // 段结束索引
@@ -552,10 +551,10 @@ impl Forest {
         self.merged_feature_poles.clear();
     }
     
-    pub fn pivots(&self, poles: &Vec<Pole>) -> (HashMap<usize, Signal>, Vec<Pivot>) {
+    pub fn pivots(&self, poles: &Vec<Pole>) -> (Signals, Vec<Pivot>) {
         let mut result: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
-        let mut signals = HashMap::new();
+        let mut signals: Signals = Signals::new();
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
             if pole.segmented || index == poles.len() - 1 {
@@ -596,7 +595,7 @@ impl Forest {
                         true
                     };
                     if new_pivot {
-                        pivots.push(Pivot { poles: vec![*b, *c, *d, *e] });
+                        pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false });
                     }
                 } else if pivots.len() > 0 {
                     let pivot = pivots.last().unwrap();
@@ -608,14 +607,15 @@ impl Forest {
             }
             i += 2;
         }
-        // 中枢扩展、扩张, todo!()
+        // 中枢扩展为更高级别中枢
         let mut i = 0;
         while pivots.len() > 1 && i <= pivots.len() - 2 {
             if let (Some(prev), Some(next)) = (pivots.get(i), pivots.get(i+1)) {
-                if prev.overlap(next) {
-                    let next = pivots.remove(i + 1);
-                    pivots.get_mut(i).unwrap().merge(next);
-                } else { i += 1; }
+                if prev.extended(next) {
+                    pivots.get_mut(i).unwrap().extended = true;
+                    pivots.get_mut(i + 1).unwrap().extended = true;
+                }
+                i += 1;
             }
         }
         if pivots.len() > 1 {
@@ -641,6 +641,14 @@ impl Forest {
     // 返回中阴阶段被合并的 poles
     fn intermediate(&self) -> &[Pole] {
         &self.merged_feature_poles
+    }
+    
+    //最后段的临时终结点
+    fn tip(&self) -> usize {
+        match self.state {
+            State::None => 0,
+            _ => self.poles.get(N_POLE_SIZE - 1).unwrap().index
+        }
     }
 
 }
@@ -835,6 +843,7 @@ impl Tracer {
         if last.count >= STEPS {
             result.push(Pole::new(last_index, Edge::from(!last.up), last.stop(), false));
         }
+        
         result
     }
 }
@@ -937,7 +946,7 @@ impl Market<'_> {
         }
     }
 
-    pub fn zigzag(&self) -> (Vec<Pole>, HashMap<usize,Signal>, Vec<Pivot>) {
+    pub fn zigzag(&self) -> Zigzag {
         let mut spins = self.tracer.poles(self.len - 1);
         let mut forest = Forest::new();
         for pole in &spins {
@@ -945,7 +954,7 @@ impl Market<'_> {
         }
         let indexes = forest.indexes();
         let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
-        let intermediate = forest.intermediate(); // 处于中阴状态的极点
+        let intermediate = forest.intermediate(); // 处于中阴状态的极点，将其移除
         spins.retain(|&pole | {
             (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
              || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
@@ -955,7 +964,17 @@ impl Market<'_> {
                 (*pole).segmented = true;
             }
         }
-        let pivots = forest.pivots(&spins);
-        (spins, pivots.0, pivots.1)
+        let (signals, pivots) = forest.pivots(&spins);
+        Zigzag { poles: spins, pivots, signals, state: forest.state(), tip: forest.tip() }
     }
+}
+
+pub type Signals = HashMap<usize, Signal>;
+#[derive(Debug)]
+pub struct Zigzag {
+    pub poles: Vec<Pole>,
+    pub pivots: Vec<Pivot>,
+    pub signals: Signals,
+    pub state: State,
+    pub tip: usize, // 最后段的临时终结点
 }

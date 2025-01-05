@@ -30,44 +30,59 @@ pub struct PluginTCalcFuncInfo {
 }
 
 type PlugInFunc = unsafe extern "C" fn(c_int, *mut c_float, *mut c_float, *mut c_float, *mut c_float);
+// 打印日志，获取输入输出，方便调试
 const LOG_MODE: c_float = 9.;
-// mode=1（默认值), 笔、段端点标识(-1,1;-100,100), mode=2，极值
+// , mode=2，极值
+const POLE_VALUE_MODE: c_float = 2.;
+// mode=1（默认值), 笔、段端点标识(-1,1;-100,100, -200(临时段端点))
 pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
-    let (zigzag, _signals, pivots) = market.zigzag();
+    let zigzag = market.zigzag();
     if *mode == LOG_MODE {
-        log!("\ncreate_market!({},{:?},{:?})\nzigzag: {:?}\npivots: {:?}\n", DataLen, market.high, market.low, zigzag, pivots);
+        log!("\ncreate_market!({},{:?},{:?})\nzigzag: {:?}\n", DataLen, market.high, market.low, zigzag);
     }
     
-    for pole in zigzag {
-        let value = if *mode == 2. {
+    for pole in &zigzag.poles {
+        let value = if *mode == POLE_VALUE_MODE {
             pole.value
         } else {
             pole.edge as isize as c_float * if pole.segmented { 100. } else { 1. }
+            * if zigzag.tip > 0 && pole.index == zigzag.tip { 200. } else { 1. }
         };
+        
         *pfOUT.offset(pole.index as isize) = value;
     }
+    if *mode != POLE_VALUE_MODE { // 将最后分段的 state 写入最后一个极点前
+        if let Some(pole) = &zigzag.poles.last() {
+            if pole.index > 0 { *pfOUT.offset(pole.index as isize - 1) = zigzag.state as isize as c_float; }
+        }
+    }
 }
-
-// mode=1（默认值), 中枢位置(-2,2), mode=2，中枢高, mode=3，中枢低, mode=4, 买卖点
+// mode=4, 买卖点
+const SIGNAL_MODE: c_float = 4.;
+// mode=2，中枢高,
+const ZG_MODE: c_float = 2.;
+// mode=3，中枢低, 如果中枢扩展，为负值;
+const ZD_MODE: c_float = 3.;
+// mode=1（默认值), 中枢位置(-2,2);  
 pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
-    let (_zigzag, signals, pivots) = market.zigzag();
+    let zigzag= market.zigzag();
     
-    if *mode == 4. {
-        for (index, signal) in signals.iter() {
+    if *mode == SIGNAL_MODE {
+        for (index, signal) in zigzag.signals.iter() {
             *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
         }
         return;
     }
-    for pivot in pivots {
-        if *mode == 2. {
+    for pivot in zigzag.pivots {
+        if *mode == ZG_MODE {
             for i in pivot.start()..=pivot.end() {
-                *pfOUT.offset(i as isize) = pivot.high() as c_float;
+                *pfOUT.offset(i as isize) = pivot.high() as c_float * if pivot.extended { -1. } else { 1. };
             }
-        } else if *mode == 3. {
+        } else if *mode == ZD_MODE {
             for i in pivot.start()..=pivot.end() {
-                *pfOUT.offset(i as isize) = pivot.low() as c_float;
+                *pfOUT.offset(i as isize) = pivot.low() as c_float * if pivot.extended { -1. } else { 1. };
             }
         } else {
             *pfOUT.offset(pivot.start() as isize) = -2.;
