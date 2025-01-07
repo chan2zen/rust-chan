@@ -169,10 +169,10 @@ impl Pivot {
     }
 
     // 回落笔的 pole 极值，是否在中枢内
-    pub fn converge(&self, pole: &Pole) -> bool {
-        match pole.edge {
-            Edge::TROUGH => pole.value <= self.high(),
-            Edge::PEAK => pole.value >= self.low(),
+    pub fn converge(&self, d: &Pole, e: &Pole) -> bool {
+        match e.edge {
+            Edge::TROUGH => e.value <= self.high() && d.value >= self.low(),
+            Edge::PEAK => e.value >= self.low() && d.value <= self.high(),
         }
     }
 
@@ -196,12 +196,14 @@ impl Pivot {
     
     fn highest(&self) -> f32 {
         self.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).max_by(f32::total_cmp).unwrap()
-
     }
     
     fn lowest(&self) -> f32 {
         self.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).min_by(f32::total_cmp).unwrap()
+    }
 
+    fn last_edge(&self) -> Edge {
+        self.poles[self.poles.len() - 1].edge
     }
 }
 // 一个 N 需要 a, b, c, d 四个极值，最多需要三个 N
@@ -459,6 +461,9 @@ impl Forest {
             },
             _ => {},
         }
+        if self.state == State::S0 { // 顺向创新高或新低后，将中阴极点去除
+            self.merged_feature_poles.clear();
+        }
     }
     
     // 相邻两个同向笔有缺口，跳过 skip 个同向笔 Pole 数量, 跳过一个同向笔则 skip=2
@@ -551,44 +556,39 @@ impl Forest {
         self.merged_feature_poles.clear();
     }
     
-    pub fn pivots(&self, poles: &Vec<Pole>) -> (Signals, Vec<Pivot>) {
-        let mut result: Vec<Pivot> = Vec::new();
+    pub fn pivots(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
+        let mut pivots: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
-        let mut signals: Signals = Signals::new();
+        let tip = self.tip();
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
-            if pole.segmented || index == poles.len() - 1 {
-                if last_segmented_index != std::usize::MAX {
-                    if (index - last_segmented_index) > N_POLE_SIZE {
-                        let (inner_signals, pivots) = self.find_pivots(poles, last_segmented_index, index);
-                        signals.extend(inner_signals);
-                        result.extend(pivots);
-                    }
+            if last_segmented_index == std::usize::MAX {
+                last_segmented_index = index;
+            } else if pole.segmented || (tip > 0 && pole.index == tip) || index == poles.len() - 1 {
+                if (index - last_segmented_index) > N_POLE_SIZE {
+                    pivots.extend(self.find_pivots(poles, last_segmented_index, index));
                 }
                 last_segmented_index = index;
             }
         }
-        
-        (signals, result)
+        pivots
     }
     
-    fn find_pivots(&self, poles: &[Pole], last_segmented_index: usize, index: usize) -> (HashMap<usize, Signal>, Vec<Pivot>) {
+    fn find_pivots(&self, poles: &[Pole], start: usize, end: usize) -> Vec<Pivot> {
         let mut pivots : Vec<Pivot> = Vec::new();
-        let mut i = last_segmented_index + 1;
-        let mut signals = HashMap::new();
-        while (i + 3) <= index {
+        let mut i = start + 1;
+        while (i + 3) <= end {
             if let (Some(b), Some(c), Some(d), Some(e)) 
             = (poles.get(i), poles.get(i + 1), poles.get(i + 2), poles.get(i + 3)) {
                 if !e.has_gap(b.value) {
                     let new_pivot = if let Some(last) = pivots.last_mut() {
-                        if last.converge(e) { // 中枢延申
+                        if last.converge(d, e) { // 中枢延申
                             last.poles.push(*d);
                             last.poles.push(*e);
                             false
                         } else if b.index > last.end() { // 新中枢
                             true
-                        } else { // 三类买卖点
-                            signals.insert(e.index, e.signal3());
+                        } else {
                             false
                         }
                     } else {
@@ -597,12 +597,6 @@ impl Forest {
                     if new_pivot {
                         pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false });
                     }
-                } else if pivots.len() > 0 {
-                    let pivot = pivots.last().unwrap();
-                    if c.index == pivot.end() {
-                        signals.insert(e.index, e.signal3());
-                    }
-
                 }
             }
             i += 2;
@@ -618,29 +612,78 @@ impl Forest {
                 i += 1;
             }
         }
-        if pivots.len() > 1 {
-            let pole = poles.get(index).unwrap();
-            signals.insert(pole.index, pole.signal1());
-            if (index + 2) < poles.len() {
-                let pivot = pivots.last().unwrap();
-                let pole = poles.get(index + 2).unwrap();
-                signals.insert(pole.index, pole.signal2(pivot));
-            }
-        } 
-        if !pivots.is_empty() && (index + 1) < poles.len() {
-            let pivot = pivots.last().unwrap();
-            let pole = poles.get(index + 1).unwrap();
+        pivots
+    }
 
-            if let Some(signal) = pole.signal3_by(pivot){
-                signals.insert(pole.index, signal);
+    /* 根据极值和中枢寻找买卖点：
+     * 1. 一类买卖点，在两个同向中枢后的分段点 segmented 处设置
+     * 2. 二类买卖点，在一类买卖点之后的首个和分段点同向点处，根据最后一个中枢位置判定
+     * 3. 三类买卖点，根据最后一个中枢对拉回中枢的极值点进行判定
+     * 4. 二三买卖点可能重合
+     * 5. 考虑类二买卖点?
+    */
+    fn signals(&self, poles: &[Pole], pivots: &Vec<Pivot>) -> HashMap<usize, Signal> {
+        let tip = self.tip();
+        let mut pivot_index = 0;
+        let mut segment_start = usize::MAX;
+        let mut segment_start_idx = usize::MAX;
+        let mut signals = Signals::new();
+
+        for (idx, pole) in poles.iter().enumerate() {
+            let segmented = pole.segmented || tip > 0 && pole.index == tip;
+            if segmented {
+                if segment_start != usize::MAX {
+                    // 如果线段没有中枢但是笔数大于三笔，也设置一类买卖点（小级别）
+                    // 线段终结，如果是趋势终结，设置一类买卖点, 暂不考虑中枢扩展
+                    let more_n = (idx - segment_start_idx) > N_POLE_SIZE; // 线段笔数5以上
+                    let mut last_pivot = None;
+                    let found = if pivot_index > 1 {
+                        if let (Some(former), Some(prev)) 
+                        = (pivots.get(pivot_index - 2), pivots.get(pivot_index - 1)) {
+                            if prev.end() < segment_start && more_n {
+                                true
+                            } else if former.last_edge() == prev.last_edge() && former.start() > segment_start && prev.end() < pole.index{
+                                last_pivot = Some(prev);
+                                true
+                            } else { false }
+                        } else { false }
+                    } else { more_n };
+                    if found {
+                        signals.insert(pole.index, pole.signal1());
+                        
+                        if let Some(pole) = poles.get(idx + 2) {
+                            // 分段拐头后的第一个反向笔，检查二类买卖点，前一段可能没有中枢 
+                            if let Some(pivot) = last_pivot {
+                                signals.insert(pole.index, pole.signal2_by(pivot));
+                            } else if let (Some(former), Some(prev)) = (poles.get(idx - 2), poles.get(idx - 1)) {
+                                // 本级别一类买卖点
+                                let mock_pivot = Pivot { poles: vec![*former, *prev], extended: false };
+                                signals.insert(pole.index, pole.signal2_by(&mock_pivot));
+                            }
+                        }
+                    }
+                }
+                segment_start = pole.index;
+                segment_start_idx = idx;
+            }
+
+            if let Some(pivot) = pivots.get(pivot_index) {
+                if pole.index == pivot.end() {
+                    if let Some(next) = poles.get(idx + 2) {
+                        if let Some(signal) = next.signal3_by(pivot) {
+                            signals.insert(next.index, signal);
+                        }
+                    }              
+                    pivot_index += 1;
+                }
             }
         }
-        (signals, pivots)
+        signals
     }
     
     // 返回中阴阶段被合并的 poles
-    fn intermediate(&self) -> &[Pole] {
-        &self.merged_feature_poles
+    fn intermediate(&self) -> Vec<Pole> {
+        self.merged_feature_poles.clone()
     }
     
     //最后段的临时终结点
@@ -696,13 +739,6 @@ impl Pole {
         }
     }
 
-    fn signal3(&self) -> Signal {
-        match self.edge {
-            Edge::PEAK => Signal::SELL3,
-            Edge::TROUGH => Signal::BUY3,
-        }
-    }
-
     fn signal3_by(&self, pivot:&Pivot) -> Option<Signal> {
         match self.edge {
             Edge::PEAK => if self.value < pivot.low() { Some(Signal::SELL3) } else { None },
@@ -717,10 +753,16 @@ impl Pole {
         }
     }
     
-    fn signal2(&self, pivot:&Pivot) -> Signal {
+    fn signal2_by(&self, pivot:&Pivot) -> Signal {
         match self.edge {
             Edge::PEAK =>  if self.value < pivot.low() { Signal::SELL23 } else { Signal::SELL2 },
             Edge::TROUGH => if self.value > pivot.high() { Signal::BUY23 } else { Signal::BUY2 },
+        }
+    }
+    fn signal2(&self) -> Signal {
+        match self.edge {
+            Edge::PEAK => Signal::SELL2,
+            Edge::TROUGH => Signal::BUY2,
         }
     }
 
@@ -831,17 +873,19 @@ impl Tracer {
             }
         }
     }
-    pub fn poles(&self, last_index: usize) -> Vec<Pole> {
+    pub fn poles(&self, _last_index: usize) -> Vec<Pole> {
         let skip_first = !self.strokes.first().unwrap().done();
-        let mut result: Vec<Pole> = self
-            .strokes
+        let mut valid_strokes = self.strokes.iter().rev().skip_while(|p| !p.done()).collect::<Vec<_>>();
+        valid_strokes.reverse();
+        let mut result: Vec<Pole> = valid_strokes
             .iter()
             .skip(if skip_first { 1 } else { 0 })
             .map(|stroke| Pole::new(stroke.index, Edge::from(stroke.up), stroke.start(), false))
             .collect();
-        let last = self.strokes.last().unwrap();
-        if last.count >= STEPS {
-            result.push(Pole::new(last_index, Edge::from(!last.up), last.stop(), false));
+        if let Some(last) = valid_strokes.last() {
+            if last.count >= STEPS {
+                result.push(Pole::new(last.index + last.days - 1, Edge::from(!last.up), last.stop(), false));
+            }
         }
         
         result
@@ -947,6 +991,10 @@ impl Market<'_> {
     }
 
     pub fn zigzag(&self) -> Zigzag {
+        self.zigzag_with_flag(false)
+    }
+
+    pub fn zigzag_with_flag(&self, skip_signal: bool) -> Zigzag {
         let mut spins = self.tracer.poles(self.len - 1);
         let mut forest = Forest::new();
         for pole in &spins {
@@ -954,18 +1002,19 @@ impl Market<'_> {
         }
         let indexes = forest.indexes();
         let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
-        let intermediate = forest.intermediate(); // 处于中阴状态的极点，将其移除
-        spins.retain(|&pole | {
-            (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
-             || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
-        });
         for pole in spins.as_mut_slice() {
             if indexes.contains(&pole.index) {
                 (*pole).segmented = true;
             }
         }
-        let (signals, pivots) = forest.pivots(&spins);
-        Zigzag { poles: spins, pivots, signals, state: forest.state(), tip: forest.tip() }
+        let pivots= forest.pivots(&spins);
+        let signals = if skip_signal { None } else { Some(forest.signals(&spins, &pivots)) };
+        let intermediate = forest.intermediate(); // 处于中阴状态的极点，将其移除
+        spins.retain(|&pole | {
+            (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
+             || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
+        });
+        Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
     }
 }
 
@@ -973,8 +1022,9 @@ pub type Signals = HashMap<usize, Signal>;
 #[derive(Debug)]
 pub struct Zigzag {
     pub poles: Vec<Pole>,
+    pub intermediate: Vec<Pole>,
     pub pivots: Vec<Pivot>,
-    pub signals: Signals,
+    pub signals: Option<Signals>,
     pub state: State,
     pub tip: usize, // 最后段的临时终结点
 }

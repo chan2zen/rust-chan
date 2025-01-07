@@ -37,11 +37,13 @@ const POLE_VALUE_MODE: c_float = 2.;
 // mode=1（默认值), 笔、段端点标识(-1,1;-100,100, -200(临时段端点))
 pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
-    let zigzag = market.zigzag();
     if *mode == LOG_MODE {
-        log!("\ncreate_market!({},{:?},{:?})\nzigzag: {:?}\n", DataLen, market.high, market.low, zigzag);
+        log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    
+    let zigzag = market.zigzag_with_flag(true);
+    if *mode == LOG_MODE {
+        log!("\nzigzag: {:?}\n", zigzag);
+    }
     for pole in &zigzag.poles {
         let value = if *mode == POLE_VALUE_MODE {
             pole.value
@@ -53,8 +55,15 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
         *pfOUT.offset(pole.index as isize) = value;
     }
     if *mode != POLE_VALUE_MODE { // 将最后分段的 state 写入最后一个极点前
+        for pole in &zigzag.intermediate {
+            *pfOUT.offset(pole.index as isize) = pole.edge as isize as c_float * 3.;
+        }
         if let Some(pole) = &zigzag.poles.last() {
             if pole.index > 0 { *pfOUT.offset(pole.index as isize - 1) = zigzag.state as isize as c_float; }
+        }
+    } else {
+        for pole in &zigzag.intermediate {
+            *pfOUT.offset(pole.index as isize) = pole.value;
         }
     }
 }
@@ -67,10 +76,10 @@ const ZD_MODE: c_float = 3.;
 // mode=1（默认值), 中枢位置(-2,2);  
 pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
-    let zigzag= market.zigzag();
+    let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE);
     
-    if *mode == SIGNAL_MODE {
-        for (index, signal) in zigzag.signals.iter() {
+    if let Some(signals) = zigzag.signals {
+        for (index, signal) in signals.iter() {
             *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
         }
         return;

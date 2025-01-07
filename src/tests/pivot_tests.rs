@@ -12,7 +12,7 @@ fn assert_forest_eq(expected: State, segmented: &[usize], pole_values: &[f32]) {
             (*pole).segmented = true;
         }
     }
-    let (_signals, pivots) = forest.pivots(&poles);
+    let pivots = forest.pivots(&poles);
     println!("pivots: {:?}", pivots);
     for p in pivots {
         println!("pivot: {}-{}, high:{}, low:{}", p.start(), p.end(), p.high(), p.low());
