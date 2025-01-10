@@ -40,7 +40,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
     if *mode == LOG_MODE {
         log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    let zigzag = market.zigzag_with_flag(true);
+    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE );
     if *mode == LOG_MODE {
         log!("\nzigzag: {:?}\n", zigzag);
     }
@@ -77,6 +77,7 @@ const ZD_MODE: c_float = 3.;
 pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
     let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE);
+    // log!("\nzigzag: {:?}\n", zigzag);
     
     if let Some(signals) = zigzag.signals {
         for (index, signal) in signals.iter() {

@@ -10,7 +10,7 @@ pub struct Stroke {
     pub low: f32,
     pub up: bool,
     pub count: usize,
-    pub days: usize,
+    pub end_index: usize,
     pub segmented: bool,
 }
 
@@ -23,7 +23,7 @@ impl Stroke {
             low,
             up,
             count: init_count,
-            days: init_count,
+            end_index: index + init_count - 1,
             segmented: false,
         }
     }
@@ -34,7 +34,7 @@ impl Stroke {
             low,
             up,
             count,
-            days: count,
+            end_index: index + count - 1,
             segmented: false,
         }
     }
@@ -69,7 +69,7 @@ impl Stroke {
     }
     
     fn end_index(&self) -> usize {
-        self.index + self.days - 1
+        self.end_index
     }
 }
 
@@ -635,19 +635,21 @@ impl Forest {
                 if segment_start != usize::MAX {
                     // 如果线段没有中枢但是笔数大于三笔，也设置一类买卖点（小级别）
                     // 线段终结，如果是趋势终结，设置一类买卖点, 暂不考虑中枢扩展
-                    let more_n = (idx - segment_start_idx) > N_POLE_SIZE; // 线段笔数5以上
+                    let mut found = (idx - segment_start_idx) > N_POLE_SIZE; // 线段笔数5以上
                     let mut last_pivot = None;
-                    let found = if pivot_index > 1 {
-                        if let (Some(former), Some(prev)) 
-                        = (pivots.get(pivot_index - 2), pivots.get(pivot_index - 1)) {
-                            if prev.end() < segment_start && more_n {
-                                true
-                            } else if former.last_edge() == prev.last_edge() && former.start() > segment_start && prev.end() < pole.index{
-                                last_pivot = Some(prev);
-                                true
-                            } else { false }
-                        } else { false }
-                    } else { more_n };
+                    if pivot_index > 0 {
+                        let prev = pivots.get(pivot_index - 1).unwrap();
+                        if prev.end() > segment_start {
+                            found = false;
+                            if pivot_index > 1 {
+                                let former = pivots.get(pivot_index - 2).unwrap();
+                                if former.last_edge() == prev.last_edge() && former.start() > segment_start && prev.end() < pole.index {
+                                    last_pivot = Some(prev);
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
                     if found {
                         signals.insert(pole.index, pole.signal1());
                         
@@ -792,7 +794,7 @@ impl Tracer {
         let last_stroke = self.strokes.last_mut().unwrap();
 
         if merged || up == last_stroke.up {
-            last_stroke.days += 1;
+            last_stroke.end_index = index;
             if !merged {
                 last_stroke.count += 1;
             }
@@ -805,15 +807,19 @@ impl Tracer {
             let high = if up { high } else { last_stroke.high };
             let low = if up { last_stroke.low } else { low };
             if index == 1 {
-                self.strokes.pop();
+                last_stroke.low = low;
+                last_stroke.count += 1;
+                last_stroke.end_index = index;
+            } else {
+                self.strokes.push(Stroke::new(index - 1, high, low, up));
             }
-            self.strokes.push(Stroke::new(index - 1, high, low, up));
         }
 
         while self.strokes.len() > 2 {
             let last_stroke = self.strokes.last().unwrap();
             let mut former_index = self.strokes.len() - 3;
-            let mut days = last_stroke.days;
+            let last_end_index = last_stroke.end_index;
+            let last_start_index = last_stroke.index;
             let mut count = last_stroke.count;
             let high = last_stroke.high;
             let low = last_stroke.low;
@@ -827,7 +833,6 @@ impl Tracer {
                     return;
                 }
                 let right_include = up && previous.low <= former.low || !up && previous.high >= former.high;
-                days = days + former.days + previous.days - 2;
                 count += former.count + previous.count - 2;
                 if !previous.done() || !former.done() {
                     if right_include {
@@ -836,14 +841,13 @@ impl Tracer {
                             let value = if up { previous.low } else { previous.high };
                             former_index -= 1;
                             let former = self.strokes.get_mut(former_index).unwrap();
-                            days += former.days - 1;
-                            count += former.count - 1;
+                            count += former.count;
                             if up {
                                 former.low = value;
                             } else {
                                 former.high = value;
                             }
-                            former.days = days;
+                            former.end_index = last_start_index;
                             former.count = count;
                             self.strokes.drain(former_index + 1..former_index + 3);
                             break;
@@ -858,7 +862,7 @@ impl Tracer {
                         } else {
                             former.low = low;
                         }
-                        former.days = days;
+                        former.end_index = last_end_index;
                         former.count = count;
                         self.strokes.drain(former_index + 1..);
                         break;
@@ -873,18 +877,17 @@ impl Tracer {
             }
         }
     }
-    pub fn poles(&self, _last_index: usize) -> Vec<Pole> {
-        let skip_first = !self.strokes.first().unwrap().done();
-        let mut valid_strokes = self.strokes.iter().rev().skip_while(|p| !p.done()).collect::<Vec<_>>();
-        valid_strokes.reverse();
+    pub fn poles(&self) -> Vec<Pole> {
+        let valid_strokes = self.strokes.iter()
+        .skip_while(|p| !p.done())
+        .take_while(|p| p.done()).collect::<Vec<_>>();
         let mut result: Vec<Pole> = valid_strokes
             .iter()
-            .skip(if skip_first { 1 } else { 0 })
             .map(|stroke| Pole::new(stroke.index, Edge::from(stroke.up), stroke.start(), false))
             .collect();
         if let Some(last) = valid_strokes.last() {
             if last.count >= STEPS {
-                result.push(Pole::new(last.index + last.days - 1, Edge::from(!last.up), last.stop(), false));
+                result.push(Pole::new(last.end_index, Edge::from(!last.up), last.stop(), false));
             }
         }
         
@@ -990,32 +993,39 @@ impl Market<'_> {
         }
     }
 
-    pub fn zigzag(&self) -> Zigzag {
-        self.zigzag_with_flag(false)
+    pub fn zigzag_with_signals(&self) -> Zigzag {
+        zigzag(false, self.tracer.poles())
     }
 
     pub fn zigzag_with_flag(&self, skip_signal: bool) -> Zigzag {
-        let mut spins = self.tracer.poles(self.len - 1);
-        let mut forest = Forest::new();
-        for pole in &spins {
-            forest.step(pole);
-        }
-        let indexes = forest.indexes();
-        let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
-        for pole in spins.as_mut_slice() {
-            if indexes.contains(&pole.index) {
-                (*pole).segmented = true;
-            }
-        }
-        let pivots= forest.pivots(&spins);
-        let signals = if skip_signal { None } else { Some(forest.signals(&spins, &pivots)) };
-        let intermediate = forest.intermediate(); // 处于中阴状态的极点，将其移除
-        spins.retain(|&pole | {
-            (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
-             || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
-        });
-        Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
+        zigzag(skip_signal, self.tracer.poles())
     }
+}
+
+fn zigzag(skip_signal: bool, mut spins: Vec<Pole>) -> Zigzag {
+    let mut forest = Forest::new();
+    for pole in &spins {
+        forest.step(pole);
+    }
+    let indexes = forest.indexes();
+    let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
+    for pole in spins.as_mut_slice() {
+        if indexes.contains(&pole.index) {
+            (*pole).segmented = true;
+        }
+    }
+    let pivots= forest.pivots(&spins);
+    let signals = if skip_signal { None } else { Some(forest.signals(&spins, &pivots)) };
+    let intermediate = forest.intermediate();
+    // 处于中阴状态的极点，将其移除
+    spins.retain(|&pole | {
+        // let retain = 
+        (*last_segmented_index > 0 && pole.index <= *last_segmented_index)
+         || intermediate.iter().find(|&p| p.index == pole.index ).is_none()
+        // println!("{:?} {:?}", pole, retain);
+        // retain
+    });
+    Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
 }
 
 pub type Signals = HashMap<usize, Signal>;
