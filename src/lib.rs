@@ -35,12 +35,21 @@ const LOG_MODE: c_float = 9.;
 // , mode=2，极值
 const POLE_VALUE_MODE: c_float = 2.;
 // mode=1（默认值), 笔、段端点标识(-1,1;-100,100, -200(临时段端点))
-pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
+pub unsafe extern "C" fn zigzag_strict(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    zigzag_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false);
+}
+
+// leap 模式与严格模式不同，将强力缺口或大力拉升短笔提升为笔
+pub unsafe extern "C" fn zigzag_leap(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    zigzag_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true);
+}
+    
+unsafe fn zigzag_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool) {
+    let market = Market::with_leap(DataLen as usize, pfINa_high, pfINb_low, leap);
     if *mode == LOG_MODE {
         log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE );
+    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE);
     if *mode == LOG_MODE {
         log!("\nzigzag: {:?}\n", zigzag);
     }
@@ -51,7 +60,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
             pole.edge as isize as c_float * if pole.segmented { 100. } else { 1. }
             * if zigzag.tip > 0 && pole.index == zigzag.tip { 200. } else { 1. }
         };
-        
+    
         *pfOUT.offset(pole.index as isize) = value;
     }
     if *mode != POLE_VALUE_MODE { // 将最后分段的 state 写入最后一个极点前
@@ -74,17 +83,25 @@ const ZG_MODE: c_float = 2.;
 // mode=3，中枢低, 如果中枢扩展，为负值;
 const ZD_MODE: c_float = 3.;
 // mode=1（默认值), 中枢位置(-2,2);  
-pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    let market = Market::new(DataLen as usize, pfINa_high, pfINb_low);
+pub unsafe extern "C" fn pivot_strict(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false);
+}
+
+pub unsafe extern "C" fn pivot_leap(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true);
+}
+
+unsafe fn pivot_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool) {
+    let market = Market::with_leap(DataLen as usize, pfINa_high, pfINb_low, leap);
     let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE);
-    // log!("\nzigzag: {:?}\n", zigzag);
-    
     if let Some(signals) = zigzag.signals {
         for (index, signal) in signals.iter() {
             *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
         }
         return;
     }
+    // log!("\nzigzag: {:?}\n", zigzag);
+    
     for pivot in zigzag.pivots {
         if *mode == ZG_MODE {
             for i in pivot.start()..=pivot.end() {
@@ -100,14 +117,22 @@ pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: 
         } 
     }
 }
-static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 3] = [
+static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 5] = [
+    PluginTCalcFuncInfo {
+        nFuncMark: 4,
+        pCallFunc: Some(pivot_leap),
+    },
+    PluginTCalcFuncInfo {
+        nFuncMark: 3,
+        pCallFunc: Some(zigzag_leap),
+    },
     PluginTCalcFuncInfo {
         nFuncMark: 2,
-        pCallFunc: Some(pivot),
+        pCallFunc: Some(pivot_strict),
     },
     PluginTCalcFuncInfo {
         nFuncMark: 1,
-        pCallFunc: Some(zigzag),
+        pCallFunc: Some(zigzag_strict),
     },
     PluginTCalcFuncInfo {
         nFuncMark: 0,

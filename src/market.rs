@@ -773,45 +773,72 @@ impl Pole {
 #[derive(Debug)]
 pub struct Tracer {
     strokes: Vec<Stroke>,
+    handle_leap: bool,
 }
 
 impl Tracer {
     pub fn new(capacity: usize) -> Self {
         Self {
             strokes: Vec::with_capacity(capacity),
+            handle_leap: false,
         }
     }
 
-    pub fn with(strokes: Vec<Stroke>) -> Self {
-        Self { strokes }
+    pub fn with_leap(capacity: usize, leap: bool) -> Self {
+        Self { strokes: Vec::with_capacity(capacity), handle_leap: leap }
     }
 
-    fn update(&mut self, index: usize, high: f32, low: f32, up: bool, merged: bool) {
+    pub fn with(strokes: Vec<Stroke>) -> Self {
+        Self { strokes, handle_leap: false }
+    }
+
+    fn update(&mut self, index: usize, high: f32, low: f32, up: bool, merged: bool, gap: bool) {
         if 0 == index {
             self.strokes.push(Stroke::new(index, high, low, up));
             return;
         }
-        let last_stroke = self.strokes.last_mut().unwrap();
-
+        let last_stroke = self.strokes.last().unwrap();
+        
         if merged || up == last_stroke.up {
-            last_stroke.end_index = index;
+            let leap = if !merged {
+                let prev_stroke = if self.strokes.len() > 2 { self.strokes.get(self.strokes.len() - 2) } else {None};
+                if let Some(prev_stroke) = prev_stroke {
+                    // 缺口突破
+                    (up && high > prev_stroke.high && (gap || (prev_stroke.done() && !last_stroke.done())))
+                    || (!up && low < prev_stroke.low && (gap || (prev_stroke.done() && !last_stroke.done())))
+                } else { false }
+            } else { false };
+            let last_stroke = self.strokes.last_mut().unwrap();
             if !merged {
-                last_stroke.count += 1;
+                if leap && self.handle_leap {
+                    last_stroke.count = STEPS;
+                } else {
+                    last_stroke.count += 1;
+                }
             }
+            last_stroke.end_index = index;
             if up && last_stroke.high < high {
                 last_stroke.high = high;
             } else if !up && last_stroke.low > low {
                 last_stroke.low = low;
             }
         } else {
+            let leap = (up && !last_stroke.up && gap && high > last_stroke.high) 
+            || (!up && last_stroke.up && gap && low < last_stroke.low);
             let high = if up { high } else { last_stroke.high };
             let low = if up { last_stroke.low } else { low };
             if index == 1 {
+                let last_stroke = self.strokes.last_mut().unwrap();
                 last_stroke.low = low;
                 last_stroke.count += 1;
                 last_stroke.end_index = index;
             } else {
-                self.strokes.push(Stroke::new(index - 1, high, low, up));
+                let mut stroke = Stroke::new(index - 1, high, low, up);
+                if leap && self.handle_leap {
+                    // 缺口反包
+                    stroke.count = STEPS;
+                }
+                self.strokes.push(stroke);
             }
         }
 
@@ -923,12 +950,16 @@ fn get_prev_value(values: &[f32], index: &Vec<i8>, i: usize, up: bool) -> f32 {
 
 impl Market<'_> {
     pub fn new(len: usize, high: *mut f32, low: *mut f32) -> Self {
+        Market::with_leap(len, high, low, false)
+    }
+    
+    pub fn with_leap(len: usize, high: *mut f32, low: *mut f32, leap: bool) -> Self {
         let mut result = Self {
             high: unsafe { std::slice::from_raw_parts_mut(high, len) },
             low: unsafe { std::slice::from_raw_parts_mut(low, len) },
             len,
             merged_index: vec![-1; len],
-            tracer: Tracer::new(len / 7),
+            tracer: Tracer::with_leap(len / 7, leap),
         };
 
         result.merge();
@@ -951,13 +982,14 @@ impl Market<'_> {
     fn merge(&mut self) {
         let mut up = true;
         self.tracer
-            .update(0, self.high[0], self.low[0], true, false);
+            .update(0, self.high[0], self.low[0], true, false, false);
         for i in 1..self.len {
             let mut curr_high = self.high[i];
             let mut curr_low = self.low[i];
             let prev_high = self.get_prev_high(i - 1, up);
             let prev_low = self.get_prev_low(i - 1, up);
             let mut merged = false;
+            let mut gap = false;
             match (
                 curr_high.total_cmp(&prev_high),
                 curr_low.total_cmp(&prev_low),
@@ -965,10 +997,12 @@ impl Market<'_> {
                 (std::cmp::Ordering::Greater, std::cmp::Ordering::Greater) => {
                     // 上升
                     up = true;
+                    gap = curr_low > prev_high;
                 }
                 (std::cmp::Ordering::Less, std::cmp::Ordering::Less) => {
                     // 下降
                     up = false;
+                    gap = curr_high < prev_low;
                 }
                 _ => {
                     // 包含
@@ -989,7 +1023,7 @@ impl Market<'_> {
                     };
                 }
             }
-            self.tracer.update(i, curr_high, curr_low, up, merged);
+            self.tracer.update(i, curr_high, curr_low, up, merged, gap);
         }
     }
 
