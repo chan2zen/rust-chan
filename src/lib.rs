@@ -3,7 +3,7 @@ mod market;
 
 use std::os::raw::{c_int, c_float, c_ushort};
 
-use market::{Market, PivotMode};
+use market::{BiMode, Market, PivotMode};
 
 #[cfg(test)]
 mod tests;
@@ -30,44 +30,109 @@ pub struct PluginTCalcFuncInfo {
 }
 
 type PlugInFunc = unsafe extern "C" fn(c_int, *mut c_float, *mut c_float, *mut c_float, *mut c_float);
-// 打印日志，获取输入输出，方便调试
-const LOG_MODE: c_float = 9.;
-// , mode=2，极值
-const POLE_VALUE_MODE: c_float = 2.;
-// mode=1（默认值), 笔、段端点标识(-1,1;-100,100, -200(临时段端点))
-pub unsafe extern "C" fn zigzag_strict(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    zigzag_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false);
+
+/**
+ * 严格笔，推笔（不允许顶底包含），缺口直接突破成笔
+ * 使用千位数值拆分，
+ * bi_mode 使用千位拆分，通过位运算，默认严格笔 1，+推笔 2， +缺口突破 4，值相加组合
+ * pivot mode 使用十位， x0x 表示笔, x1x 表示段, x2x 表示趋势
+ * 日志使用个位，xx0 表示无日志，xx1 表示打印日志
+ * 
+ * pole 使用百位，1xx 表示极值, 2xx 表示极点类型，笔、段端点标识(-1,1;-100,100, -200(临时段端点))
+ * 或者
+ * mode=4, 买卖点，4xx 表示买卖点
+ * mode=2，中枢高, 2xx 表示中枢高
+ * mode=3，中枢低, 如果中枢扩展，为负值; 3xx 表示中枢低
+ * mode=1（默认值), 中枢位置(-2,2);  1xx 表示中枢起始位置
+ */
+struct ZigzagConfig {
+    bi_mode: BiMode,
+    log: bool,
+    pivot_mode: PivotMode,
+    pole_value_mode: bool,
+    pole_edge_mode: bool,
+
+    signal: bool,
+    zg: bool,
+    zd: bool,
+    pivot_position: bool,
 }
 
-// leap 模式与严格模式不同，将强力缺口或大力拉升短笔提升为笔
-pub unsafe extern "C" fn zigzag_leap(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    zigzag_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true);
+impl ZigzagConfig {
+    fn new(mode: i32, pivot: bool) -> Self {
+        let bi_mode = BiMode::new(mode);
+
+        let mut zd = false;
+        let mut zg = false;
+        let mut signal = false;
+        let mut pivot_position = false;
+        let mut pole_value_mode = false;
+        let mut pole_edge_mode = false;
+        if pivot {
+            signal = mode % 1000 / 100 == 4;
+            zd = mode % 1000 / 100 == 3;
+            zg = mode % 1000 / 100 == 2;
+            pivot_position = mode % 1000 / 100 == 1;
+        } else {
+            pole_value_mode = mode % 1000 / 100 == 1;
+            pole_edge_mode = mode % 1000 / 100 == 2;
+        }
+
+        let pivot_mode = PivotMode::new(mode);
+        let log = mode % 10 == 1;
+        ZigzagConfig {
+            bi_mode,
+            log,
+            pivot_mode,
+            pole_value_mode,
+            pole_edge_mode,
+            signal,
+            zg,
+            zd,
+            pivot_position,
+        }
+    }
 }
-    
-unsafe fn zigzag_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool) {
-    let market = Market::with_leap(DataLen as usize, pfINa_high, pfINb_low, leap);
-    if *mode == LOG_MODE {
+
+pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    let config = ZigzagConfig::new(*mode as i32, false);
+    let DataLen = DataLen;
+    let market = Market::with_bi_mode(DataLen as usize, pfINa_high, pfINb_low, config.bi_mode);
+    if config.log {
         log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE, market::PivotMode::BI);
-    if *mode == LOG_MODE {
-        log!("\nzigzag: {:?}\n", zigzag);
+    let zr = market.zigzag_with_flag(!config.log, config.pivot_mode);
+    if config.log {
+        log!("\nzr: {:?}\n", zr);
     }
-    for pole in &zigzag.poles {
-        let value = if *mode == POLE_VALUE_MODE {
+    let zigzag = match config.pivot_mode {
+        PivotMode::BI => zr.bi_zigzag.unwrap(),
+        PivotMode::DUAN => zr.duan_zigzag.unwrap(),
+        PivotMode::TREND => zr.trend_zigzag.unwrap(),
+    };
+    let poles = &zr.spins.unwrap();
+    for pole in poles {
+        let value = if config.pole_value_mode {
             pole.value
         } else {
-            pole.edge as isize as c_float * if pole.segmented { 100. } else { 1. }
+            pole.edge as isize as c_float * 
+            if (config.pivot_mode.is_bi() && pole.segmented) 
+                || (config.pivot_mode.is_duan() && pole.trended)
+                || (config.pivot_mode.is_trend() && pole.trend_upgraded) { 
+                100. 
+            } else if (config.pivot_mode.is_bi() && !pole.segmented && !pole.trended && !pole.trend_upgraded)
+                || (config.pivot_mode.is_duan() && pole.segmented)
+                || (config.pivot_mode.is_trend() && pole.trended) { 1. } else { 0. }
             * if zigzag.tip > 0 && pole.index == zigzag.tip { 200. } else { 1. }
         };
-    
+
         *pfOUT.offset(pole.index as isize) = value;
     }
-    if *mode != POLE_VALUE_MODE { // 将最后分段的 state 写入最后一个极点前
+    if config.pole_edge_mode { // 将最后分段的 state 写入最后一个极点前
         for pole in &zigzag.intermediate {
             *pfOUT.offset(pole.index as isize) = pole.edge as isize as c_float * 3.;
         }
-        if let Some(pole) = &zigzag.poles.last() {
+        if let Some(pole) = poles.last() {
             if pole.index > 0 { *pfOUT.offset(pole.index as isize - 1) = zigzag.state as isize as c_float; }
         }
     } else {
@@ -76,100 +141,56 @@ unsafe fn zigzag_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb
         }
     }
 }
-// mode=4, 买卖点
-const SIGNAL_MODE: c_float = 4.;
-// mode=2，中枢高,
-const ZG_MODE: c_float = 2.;
-// mode=3，中枢低, 如果中枢扩展，为负值;
-const ZD_MODE: c_float = 3.;
-// mode=1（默认值), 中枢位置(-2,2);  
-pub unsafe extern "C" fn pivot_strict(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::BI);
-}
 
-pub unsafe extern "C" fn pivot_leap(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::BI);
-}
+pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    let config = ZigzagConfig::new(*mode as i32, true);
+    let market = Market::with_bi_mode(DataLen as usize, pfINa_high, pfINb_low, config.bi_mode);
+    let zr= market.zigzag_with_flag(!config.signal, config.pivot_mode);
 
-pub unsafe extern "C" fn pivot_strict_duan(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::DUAN);
-}
-
-pub unsafe extern "C" fn pivot_leap_duan(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::DUAN);
-}
-pub unsafe extern "C" fn pivot_strict_trend(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::TREND);
-}
-
-pub unsafe extern "C" fn pivot_leap_trend(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::TREND);
-}
-unsafe fn pivot_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool, pivot_mode: PivotMode) {
-    let market = Market::with_leap(DataLen as usize, pfINa_high, pfINb_low, leap);
-    let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE, pivot_mode);
-    if let Some(signals) = zigzag.signals {
-        for (index, signal) in signals.iter() {
-            *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
+    let zigzag = match config.pivot_mode {
+        PivotMode::BI => zr.bi_zigzag.unwrap(),
+        PivotMode::DUAN => zr.duan_zigzag.unwrap(),
+        PivotMode::TREND => zr.trend_zigzag.unwrap(),
+    };
+    if config.signal {
+        if let Some(signals) = zigzag.signals {
+            for (index, signal) in signals.iter() {
+                *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
+            }
         }
         return;
     }
     // log!("\nzigzag: {:?}\n", zigzag);
     
     for pivot in zigzag.pivots {
-        if *mode == ZG_MODE {
+        if config.zg {
             for i in pivot.start()..=pivot.end() {
                 *pfOUT.offset(i as isize) = pivot.high() as c_float * if pivot.extended { -1. } else { 1. };
             }
-        } else if *mode == ZD_MODE {
+        } else if config.zd {
             for i in pivot.start()..=pivot.end() {
                 *pfOUT.offset(i as isize) = pivot.low() as c_float * if pivot.extended { -1. } else { 1. };
             }
-        } else {
+        } else if config.pivot_position {
             *pfOUT.offset(pivot.start() as isize) = -2.;
             *pfOUT.offset(pivot.end() as isize) = 2.;
         } 
     }
 }
-static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 9] = [
-    PluginTCalcFuncInfo {
-        nFuncMark: 8,
-        pCallFunc: Some(pivot_strict_trend),
-    },
-    PluginTCalcFuncInfo {
-        nFuncMark: 7,
-        pCallFunc: Some(pivot_strict_duan),
-    },
-    PluginTCalcFuncInfo {
-        nFuncMark: 6,
-        pCallFunc: Some(pivot_leap_trend),
-    },
-    PluginTCalcFuncInfo {
-        nFuncMark: 5,
-        pCallFunc: Some(pivot_leap_duan),
-    },
-    PluginTCalcFuncInfo {
-        nFuncMark: 4,
-        pCallFunc: Some(pivot_leap),
-    },
-    PluginTCalcFuncInfo {
-        nFuncMark: 3,
-        pCallFunc: Some(zigzag_leap),
-    },
+static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 3] = [
     PluginTCalcFuncInfo {
         nFuncMark: 2,
-        pCallFunc: Some(pivot_strict),
+        pCallFunc: Some(pivot),
     },
     PluginTCalcFuncInfo {
         nFuncMark: 1,
-        pCallFunc: Some(zigzag_strict),
+        pCallFunc: Some(zigzag),
     },
     PluginTCalcFuncInfo {
         nFuncMark: 0,
         pCallFunc: None,
     },
 ];
-
 
 #[no_mangle]
 pub unsafe extern "C" fn RegisterTdxFunc(pFun: *mut *mut PluginTCalcFuncInfo) -> c_int {

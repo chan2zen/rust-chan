@@ -14,6 +14,19 @@ pub struct Stroke {
     pub segmented: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BiMode {
+    pub tuibi: bool, // 推笔，顶底分型不允许包含
+    pub quekou: bool, // 缺口突破直接成笔
+}
+impl BiMode {
+    pub(crate) fn new(mode: i32) -> Self {
+        let tuibi = mode / 1000 & 2 == 2;
+        let quekou = mode / 1000 & 4 == 4;
+        Self { tuibi, quekou }
+    }
+}
+
 impl Stroke {
     pub fn new(index: usize, high: f32, low: f32, up: bool) -> Self {
         let init_count = if index == 0 { 1 } else { 2 };
@@ -157,6 +170,7 @@ pub enum State {
 pub struct Pivot {
     pub poles: Vec<Pole>,
     pub extended: bool,
+    contains_3bs: bool,
 }
 
 impl Pivot {
@@ -186,20 +200,20 @@ impl Pivot {
     }
     
     fn extended(&self, next: &Pivot) -> bool {
-        next.high() < self.low() && next.highest() >= self.lowest() 
-        || next.low() > self.high() && next.lowest() <= self.highest()
+        next.high() < self.low() && next.highest(true) >= self.lowest(false) 
+        || next.low() > self.high() && next.lowest(true) <= self.highest(false)
     }
     
     fn merge(&mut self, next: Pivot) {
         self.poles.extend(next.poles);
     }
     
-    fn highest(&self) -> f32 {
-        self.poles.iter().filter(|p| p.edge == Edge::PEAK).map(|p| p.value).max_by(f32::total_cmp).unwrap()
+    fn highest(&self, skip_3bs: bool) -> f32 {
+        self.poles.iter().skip(if skip_3bs && self.contains_3bs {2} else {0}).filter(|p| p.edge == Edge::PEAK).map(|p| p.value).max_by(f32::total_cmp).unwrap()
     }
     
-    fn lowest(&self) -> f32 {
-        self.poles.iter().filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).min_by(f32::total_cmp).unwrap()
+    fn lowest(&self, skip_3bs: bool) -> f32 {
+        self.poles.iter().skip(if skip_3bs && self.contains_3bs {2} else {0}).filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).min_by(f32::total_cmp).unwrap()
     }
 
     fn last_edge(&self) -> Edge {
@@ -600,9 +614,10 @@ impl Forest {
                         true
                     };
                     if new_pivot {
-                        pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false });
+                        let contains_3bs = !pivots.is_empty() && poles.get(i-1).unwrap().index == pivots.last().unwrap().end();
+                        pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false, contains_3bs });
                     }
-                }
+                } 
             }
             i += 2;
         }
@@ -664,7 +679,7 @@ impl Forest {
                                 signals.insert(pole.index, pole.signal2_by(pivot));
                             } else if let (Some(former), Some(prev)) = (poles.get(idx - 2), poles.get(idx - 1)) {
                                 // 本级别一类买卖点
-                                let mock_pivot = Pivot { poles: vec![*former, *prev], extended: false };
+                                let mock_pivot = Pivot { poles: vec![*former, *prev], extended: false, contains_3bs: false };
                                 signals.insert(pole.index, pole.signal2_by(&mock_pivot));
                             }
                         }
@@ -811,23 +826,23 @@ impl Pole {
 #[derive(Debug)]
 pub struct Tracer {
     strokes: Vec<Stroke>,
-    handle_leap: bool,
+    bi_mode: BiMode,
 }
 
 impl Tracer {
     pub fn new(capacity: usize) -> Self {
         Self {
             strokes: Vec::with_capacity(capacity),
-            handle_leap: false,
+            bi_mode: BiMode { tuibi: false, quekou: false},
         }
     }
 
-    pub fn with_leap(capacity: usize, leap: bool) -> Self {
-        Self { strokes: Vec::with_capacity(capacity), handle_leap: leap }
+    pub fn with_bi_mode(capacity: usize, bi_mode: BiMode) -> Self {
+        Self { strokes: Vec::with_capacity(capacity), bi_mode }
     }
 
     pub fn with(strokes: Vec<Stroke>) -> Self {
-        Self { strokes, handle_leap: false }
+        Self { strokes, bi_mode: BiMode { tuibi: false, quekou: false} }
     }
 
     fn update(&mut self, index: usize, high: f32, low: f32, up: bool, merged: bool, gap: bool) {
@@ -842,13 +857,13 @@ impl Tracer {
                 let prev_stroke = if self.strokes.len() > 2 { self.strokes.get(self.strokes.len() - 2) } else {None};
                 if let Some(prev_stroke) = prev_stroke {
                     // 缺口突破
-                    (up && high > prev_stroke.high && (gap /*|| (prev_stroke.done() && !last_stroke.done())*/)) // 只保留缺口突破处理
-                    || (!up && low < prev_stroke.low && (gap /* || (prev_stroke.done() && !last_stroke.done())*/))
+                    (up && low < prev_stroke.high && high > prev_stroke.high && (gap /*|| (prev_stroke.done() && !last_stroke.done())*/)) // 只保留缺口突破处理
+                    || (!up && high > prev_stroke.low && low < prev_stroke.low && (gap /* || (prev_stroke.done() && !last_stroke.done())*/))
                 } else { false }
             } else { false };
             let last_stroke = self.strokes.last_mut().unwrap();
             if !merged {
-                if leap && self.handle_leap {
+                if leap && self.bi_mode.quekou {
                     last_stroke.count = STEPS;
                 } else {
                     last_stroke.count += 1;
@@ -872,7 +887,7 @@ impl Tracer {
                 last_stroke.end_index = index;
             } else {
                 let mut stroke = Stroke::new(index - 1, high, low, up);
-                if leap && self.handle_leap {
+                if leap && self.bi_mode.quekou {
                     // 缺口反包
                     stroke.count = STEPS;
                 }
@@ -988,16 +1003,16 @@ fn get_prev_value(values: &[f32], index: &Vec<i8>, i: usize, up: bool) -> f32 {
 
 impl Market<'_> {
     pub fn new(len: usize, high: *mut f32, low: *mut f32) -> Self {
-        Market::with_leap(len, high, low, false)
+        Market::with_bi_mode(len, high, low, BiMode::default())
     }
     
-    pub fn with_leap(len: usize, high: *mut f32, low: *mut f32, leap: bool) -> Self {
+    pub fn with_bi_mode(len: usize, high: *mut f32, low: *mut f32, bi_mode: BiMode) -> Self {
         let mut result = Self {
             high: unsafe { std::slice::from_raw_parts_mut(high, len) },
             low: unsafe { std::slice::from_raw_parts_mut(low, len) },
             len,
             merged_index: vec![-1; len],
-            tracer: Tracer::with_leap(len / 7, leap),
+            tracer: Tracer::with_bi_mode(len / 7, bi_mode),
         };
 
         result.merge();
@@ -1065,40 +1080,89 @@ impl Market<'_> {
         }
     }
 
-    pub fn zigzag_with_signals(&self) -> Zigzag {
-        zigzag(false, self.tracer.poles(), PivotMode::BI)
+    pub fn zigzag_with_signals(&self) -> ZigzagResult {
+        self.zigzag_with_flag(false, PivotMode::BI)
     }
 
-    pub fn zigzag_with_flag(&self, skip_signal: bool, mode: PivotMode) -> Zigzag {
+    pub fn zigzag_with_flag(&self, skip_signal: bool, mode: PivotMode) -> ZigzagResult {
         zigzag(skip_signal, self.tracer.poles(), mode)
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
+pub struct ZigzagResult {
+    pub spins: Option<Vec<Pole>>,
+    pub bi_zigzag: Option<Zigzag>,
+    pub duan_zigzag: Option<Zigzag>,
+    pub trend_zigzag: Option<Zigzag>,
+}
+
+impl ZigzagResult {
+    pub fn new() -> Self {
+        Self { spins: None, bi_zigzag: None, duan_zigzag: None, trend_zigzag: None }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PivotMode {
     BI,
     DUAN,
     TREND,
 }
 
-fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> Zigzag {
-    let (forest, mut pivots, mut signals, intermediate) = zigzag_internal(skip_signal, &mut spins);
+impl PivotMode {
+    pub fn new(mode: i32) -> Self {
+        match mode % 100 / 10 {
+            1 => PivotMode::DUAN,
+            2 => PivotMode::TREND,
+            _ => PivotMode::BI,
+        }
+    }
+
+    pub fn is_bi(&self) -> bool {
+        match self {
+            PivotMode::BI => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_duan(&self) -> bool {
+        match self {
+            PivotMode::DUAN => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_trend(&self) -> bool {
+        match self {
+            PivotMode::TREND => true,
+            _ => false,
+        }
+    }
+}
+
+fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> ZigzagResult {
+    let mut zz = ZigzagResult::new();
+    let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut spins);
+    zz.bi_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
     if mode != PivotMode::BI {
         let mut segments = spins.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
         segments.iter_mut().for_each(|p| p.segmented = false);
-        (_, pivots, signals, _) = zigzag_internal(skip_signal, &mut segments);
+        let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
+        zz.duan_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
         let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
         spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trended = true });
         if mode != PivotMode::DUAN {
             segments = segments.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
             segments.iter_mut().for_each(|p| p.segmented = false);
-            (_, pivots, signals, _) = zigzag_internal(skip_signal, &mut segments);
+            let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
             let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
             spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trend_upgraded = true });
+            zz.trend_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
         }
-        
     }
-    Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
+    zz.spins = Some(spins);
+    zz
 }
 
 fn zigzag_internal(skip_signal: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Pivot>, Option<HashMap<usize, Signal>>, Vec<Pole>) {
@@ -1131,7 +1195,6 @@ fn zigzag_internal(skip_signal: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Piv
 pub type Signals = HashMap<usize, Signal>;
 #[derive(Debug)]
 pub struct Zigzag {
-    pub poles: Vec<Pole>,
     pub intermediate: Vec<Pole>,
     pub pivots: Vec<Pivot>,
     pub signals: Option<Signals>,
