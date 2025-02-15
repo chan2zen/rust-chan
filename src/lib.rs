@@ -3,7 +3,7 @@ mod market;
 
 use std::os::raw::{c_int, c_float, c_ushort};
 
-use market::Market;
+use market::{Market, PivotMode};
 
 #[cfg(test)]
 mod tests;
@@ -49,7 +49,7 @@ unsafe fn zigzag_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb
     if *mode == LOG_MODE {
         log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE);
+    let zigzag = market.zigzag_with_flag(*mode != LOG_MODE, market::PivotMode::BI);
     if *mode == LOG_MODE {
         log!("\nzigzag: {:?}\n", zigzag);
     }
@@ -84,16 +84,30 @@ const ZG_MODE: c_float = 2.;
 const ZD_MODE: c_float = 3.;
 // mode=1（默认值), 中枢位置(-2,2);  
 pub unsafe extern "C" fn pivot_strict(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false);
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::BI);
 }
 
 pub unsafe extern "C" fn pivot_leap(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
-    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true);
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::BI);
 }
 
-unsafe fn pivot_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool) {
+pub unsafe extern "C" fn pivot_strict_duan(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::DUAN);
+}
+
+pub unsafe extern "C" fn pivot_leap_duan(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::DUAN);
+}
+pub unsafe extern "C" fn pivot_strict_trend(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, false, PivotMode::TREND);
+}
+
+pub unsafe extern "C" fn pivot_leap_trend(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    pivot_mode(DataLen, pfOUT, pfINa_high, pfINb_low, mode, true, PivotMode::TREND);
+}
+unsafe fn pivot_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_low: *mut f32, mode: *mut f32, leap: bool, pivot_mode: PivotMode) {
     let market = Market::with_leap(DataLen as usize, pfINa_high, pfINb_low, leap);
-    let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE);
+    let zigzag= market.zigzag_with_flag(*mode != SIGNAL_MODE, pivot_mode);
     if let Some(signals) = zigzag.signals {
         for (index, signal) in signals.iter() {
             *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
@@ -117,7 +131,23 @@ unsafe fn pivot_mode(DataLen: i32, pfOUT: *mut f32, pfINa_high: *mut f32, pfINb_
         } 
     }
 }
-static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 5] = [
+static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 9] = [
+    PluginTCalcFuncInfo {
+        nFuncMark: 8,
+        pCallFunc: Some(pivot_strict_trend),
+    },
+    PluginTCalcFuncInfo {
+        nFuncMark: 7,
+        pCallFunc: Some(pivot_strict_duan),
+    },
+    PluginTCalcFuncInfo {
+        nFuncMark: 6,
+        pCallFunc: Some(pivot_leap_trend),
+    },
+    PluginTCalcFuncInfo {
+        nFuncMark: 5,
+        pCallFunc: Some(pivot_leap_duan),
+    },
     PluginTCalcFuncInfo {
         nFuncMark: 4,
         pCallFunc: Some(pivot_leap),

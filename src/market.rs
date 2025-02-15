@@ -252,7 +252,12 @@ impl Forest {
                     self.state = State::S11;
                     self.merge_n(N_FIRST);
                     self.state = State::S0;
-                } else { self.state = State::S12; }
+                } else { 
+                    self.state = State::S12; 
+                    // 如果已经多次合并并出现反向顶底分型，则线段结束于反向顶底位置
+                    if self.has_feature_reverse() {
+                    }
+                }
             },
             State::S2 => {
                 if self.forward() {
@@ -671,6 +676,11 @@ impl Forest {
 
             if let Some(pivot) = pivots.get(pivot_index) {
                 if pole.index == pivot.end() {
+                    if let Some(next) = poles.get(idx + 1) {
+                        if let Some(signal) = next.signal3_by(pivot) {
+                            signals.insert(next.index, signal);
+                        }
+                    }
                     if let Some(next) = poles.get(idx + 2) {
                         if let Some(signal) = next.signal3_by(pivot) {
                             signals.insert(next.index, signal);
@@ -695,6 +705,30 @@ impl Forest {
             _ => self.poles.get(N_POLE_SIZE - 1).unwrap().index
         }
     }
+    
+    // 特征序列具有反向顶底分型
+    fn has_feature_reverse(&mut self) -> bool {
+        if self.merged_feature_poles.len() >= 4 {
+            let mut poles = self.merged_feature_poles.clone();
+            poles.extend_from_slice(&self.poles[self.poles.len() - 3 ..]);
+            poles.sort_by_key(|p| p.index);
+            let mut f = Forest::new();
+            for p in poles {
+                f.step(&p);
+            }
+            let indexes = f.indexes();
+            if indexes.len() > 0 {
+                self.segmented_index.extend(&indexes);
+                self.poles.clear();
+                self.poles.extend(&f.poles);
+                self.merged_feature_poles.clear();
+                self.merged_feature_poles.extend(&f.merged_feature_poles);
+                self.state = f.state;
+                return true;
+            }
+        }
+        false
+    }
 
 }
 #[derive(Debug, PartialEq, Eq,Clone, Copy)]
@@ -716,6 +750,8 @@ pub struct Pole {
     pub edge: Edge,
     pub value: f32,
     pub segmented: bool,
+    pub trended: bool,
+    pub trend_upgraded: bool,
 }
 
 impl Pole {
@@ -728,6 +764,8 @@ impl Pole {
             edge,
             value,
             segmented,
+            trended: false,
+            trend_upgraded: false,
         }
     }
 
@@ -804,8 +842,8 @@ impl Tracer {
                 let prev_stroke = if self.strokes.len() > 2 { self.strokes.get(self.strokes.len() - 2) } else {None};
                 if let Some(prev_stroke) = prev_stroke {
                     // 缺口突破
-                    (up && high > prev_stroke.high && (gap || (prev_stroke.done() && !last_stroke.done())))
-                    || (!up && low < prev_stroke.low && (gap || (prev_stroke.done() && !last_stroke.done())))
+                    (up && high > prev_stroke.high && (gap /*|| (prev_stroke.done() && !last_stroke.done())*/)) // 只保留缺口突破处理
+                    || (!up && low < prev_stroke.low && (gap /* || (prev_stroke.done() && !last_stroke.done())*/))
                 } else { false }
             } else { false };
             let last_stroke = self.strokes.last_mut().unwrap();
@@ -1028,17 +1066,44 @@ impl Market<'_> {
     }
 
     pub fn zigzag_with_signals(&self) -> Zigzag {
-        zigzag(false, self.tracer.poles())
+        zigzag(false, self.tracer.poles(), PivotMode::BI)
     }
 
-    pub fn zigzag_with_flag(&self, skip_signal: bool) -> Zigzag {
-        zigzag(skip_signal, self.tracer.poles())
+    pub fn zigzag_with_flag(&self, skip_signal: bool, mode: PivotMode) -> Zigzag {
+        zigzag(skip_signal, self.tracer.poles(), mode)
     }
 }
 
-fn zigzag(skip_signal: bool, mut spins: Vec<Pole>) -> Zigzag {
+#[derive(Debug, PartialEq, Eq)]
+pub enum PivotMode {
+    BI,
+    DUAN,
+    TREND,
+}
+
+fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> Zigzag {
+    let (forest, mut pivots, mut signals, intermediate) = zigzag_internal(skip_signal, &mut spins);
+    if mode != PivotMode::BI {
+        let mut segments = spins.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
+        segments.iter_mut().for_each(|p| p.segmented = false);
+        (_, pivots, signals, _) = zigzag_internal(skip_signal, &mut segments);
+        let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
+        spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trended = true });
+        if mode != PivotMode::DUAN {
+            segments = segments.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
+            segments.iter_mut().for_each(|p| p.segmented = false);
+            (_, pivots, signals, _) = zigzag_internal(skip_signal, &mut segments);
+            let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
+            spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trend_upgraded = true });
+        }
+        
+    }
+    Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
+}
+
+fn zigzag_internal(skip_signal: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Pivot>, Option<HashMap<usize, Signal>>, Vec<Pole>) {
     let mut forest = Forest::new();
-    for pole in &spins {
+    for pole in &*spins {
         forest.step(pole);
     }
     let indexes = forest.indexes();
@@ -1048,8 +1113,9 @@ fn zigzag(skip_signal: bool, mut spins: Vec<Pole>) -> Zigzag {
             (*pole).segmented = true;
         }
     }
-    let pivots= forest.pivots(&spins);
-    let signals = if skip_signal { None } else { Some(forest.signals(&spins, &pivots)) };
+    let pivots= forest.pivots(&*spins);
+    let signals = if skip_signal { None } else { Some(forest.signals(&*spins, &pivots)) };
+    
     let intermediate = forest.intermediate();
     // 处于中阴状态的极点，将其移除
     spins.retain(|&pole | {
@@ -1059,7 +1125,7 @@ fn zigzag(skip_signal: bool, mut spins: Vec<Pole>) -> Zigzag {
         // println!("{:?} {:?}", pole, retain);
         // retain
     });
-    Zigzag { poles: spins, intermediate, pivots, signals, state: forest.state(), tip: forest.tip() }
+    (forest, pivots, signals, intermediate)
 }
 
 pub type Signals = HashMap<usize, Signal>;
