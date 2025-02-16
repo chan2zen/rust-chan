@@ -1146,18 +1146,34 @@ fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> ZigzagRes
     let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut spins);
     zz.bi_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
     if mode != PivotMode::BI {
-        let mut segments = spins.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
+        let tip = forest.tip();
+        let mut segments = spins.iter().filter(|pole| pole.segmented || (tip > 0 && pole.index == tip)).cloned().collect::<Vec<Pole>>();
         segments.iter_mut().for_each(|p| p.segmented = false);
         let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
         zz.duan_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
         let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
-        spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trended = true });
+        spins.iter_mut().for_each(|p| {
+            if segmented_indexes.contains(&p.index) { 
+                p.trended = true 
+            }
+            if p.index == tip {
+                p.segmented = true;
+            }
+        });
         if mode != PivotMode::DUAN {
-            segments = segments.iter().filter(|pole| pole.segmented).cloned().collect::<Vec<Pole>>();
+            let tip = forest.tip();
+            segments = segments.iter().filter(|pole| pole.segmented || (tip > 0 && pole.index == tip)).cloned().collect::<Vec<Pole>>();
             segments.iter_mut().for_each(|p| p.segmented = false);
             let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
             let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
-            spins.iter_mut().for_each(|p| if segmented_indexes.contains(&p.index) { p.trend_upgraded = true });
+            spins.iter_mut().for_each(|p| {
+                if segmented_indexes.contains(&p.index) { 
+                    p.trend_upgraded = true 
+                }
+                if p.index == tip {
+                    p.trended = true;
+                }
+            });
             zz.trend_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
         }
     }
