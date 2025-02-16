@@ -260,3 +260,8 @@ fn go_123223() {
 fn go_origin_sample() {
     assert_forest_eq(State::S0, &[0, 5, 14, 19],&[1.0, 3.0, 2.0, 5.0, 4.0, 6.0, 4.5, 5.5, 3.2, 4.8, 1.5, 6.2, 1.2, 3.5, 0.5, 1.3, 0.8, 5.6, 3.0, 7.]);
 }
+
+#[test]
+fn go_reverse_nostandard_fenxing() {
+    todo!()
+}

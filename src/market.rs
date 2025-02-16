@@ -11,7 +11,6 @@ pub struct Stroke {
     pub up: bool,
     pub count: usize,
     pub end_index: usize,
-    pub segmented: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -37,7 +36,6 @@ impl Stroke {
             up,
             count: init_count,
             end_index: index + init_count - 1,
-            segmented: false,
         }
     }
     pub fn sample(index: usize, high: f32, low: f32, count: usize, up: bool) -> Self {
@@ -48,7 +46,6 @@ impl Stroke {
             up,
             count,
             end_index: index + count - 1,
-            segmented: false,
         }
     }
 
@@ -170,7 +167,7 @@ pub enum State {
 pub struct Pivot {
     pub poles: Vec<Pole>,
     pub extended: bool,
-    contains_3bs: bool,
+    contains_3bs: bool, // 是否包含第三类买卖点，两个中枢重叠排除第三类买卖点的重叠
 }
 
 impl Pivot {
@@ -199,7 +196,8 @@ impl Pivot {
         self.poles.iter().take(4).filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).max_by(f32::total_cmp).unwrap()
     }
     
-    fn extended(&self, next: &Pivot) -> bool {
+    // 中枢扩张判定
+    fn expand(&self, next: &Pivot) -> bool {
         next.high() < self.low() && next.highest(true) >= self.lowest(false) 
         || next.low() > self.high() && next.lowest(true) <= self.highest(false)
     }
@@ -208,10 +206,12 @@ impl Pivot {
         self.poles.extend(next.poles);
     }
     
+    // 中枢 GG，判定中枢扩张时排除第三类买卖点
     fn highest(&self, skip_3bs: bool) -> f32 {
         self.poles.iter().skip(if skip_3bs && self.contains_3bs {2} else {0}).filter(|p| p.edge == Edge::PEAK).map(|p| p.value).max_by(f32::total_cmp).unwrap()
     }
-    
+
+    // 中枢 DD，判定中枢扩张时排除第三类买卖点
     fn lowest(&self, skip_3bs: bool) -> f32 {
         self.poles.iter().skip(if skip_3bs && self.contains_3bs {2} else {0}).filter(|p| p.edge == Edge::TROUGH).map(|p| p.value).min_by(f32::total_cmp).unwrap()
     }
@@ -219,22 +219,29 @@ impl Pivot {
     fn last_edge(&self) -> Edge {
         self.poles[self.poles.len() - 1].edge
     }
+    
+    fn check_extended(&mut self) {
+        if !self.extended && self.poles.len() >= N_POLE_SIZE * 3 - 2 {
+            self.extended = true;
+        }
+    }
 }
 // 一个 N 需要 a, b, c, d 四个极值，最多需要三个 N
 const N_POLE_SIZE: usize = 4;
 const N_FIRST: usize = 1; // 第一个 N
 const N_SECOND: usize = 2;
 const N_THIRD: usize = 3;
+// 分段器
 pub struct Forest {
     /* 极值，四个极值构成一个 N, 连续三个 N 需要最多 10 个极值
      */
     poles: Vec<Pole>, 
-    state: State,
+    state: State, // 最新分段状态，对应图谱中的编号
 
-    with_entry: bool,
-    with_signals: bool,
+    with_entry: bool, // 是否设置进入段，如果设置中枢从下一段开始，否则从当前段开始
+    with_signals: bool, // 是否输出买卖点
     
-    segmented_index: Vec<usize>,
+    segmented_index: Vec<usize>, // 已分段的索引位置
     merged_feature_poles: Vec<Pole>, // 存放被合并的反向特征序列极值，生成新段时清空
 }
 impl Forest {
@@ -250,6 +257,7 @@ impl Forest {
         self.state
     }
 
+    // 森林漫步，寻找分段点
     pub fn step(&mut self, pole: &Pole) {
         self.poles.push(pole.clone());
         match self.state {
@@ -275,9 +283,8 @@ impl Forest {
                     self.state = State::S0;
                 } else { 
                     self.state = State::S12; 
-                    // 如果已经多次合并并出现反向顶底分型，则线段结束于反向顶底位置
-                    if self.has_feature_reverse() {
-                    }
+                    // 如果已经多次合并且出现反向顶底分型，则线段结束于反向顶底位置
+                    self.check_feature_reverse();
                 }
             },
             State::S2 => {
@@ -507,7 +514,7 @@ impl Forest {
         self.poles.get(self.poles.len() - to_end)
     }
     
-    // 第一个 N 顺势突破
+    // 第一个 N 方向顺势突破
     fn forward(&self) -> bool {
         if let (Some(prev), Some(last)) = (self.poles.get(N_POLE_SIZE - 1), self.last_pole(1)) {
             match prev.edge {
@@ -582,10 +589,12 @@ impl Forest {
         self.merged_feature_poles.clear();
     }
     
+    // 按照分段进行内部中枢划分
     pub fn pivots(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
         let mut pivots: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
         let tip = self.tip();
+        // 根据是否设置进入段，设定至少需要的极点数量
         let min_pole_size = N_POLE_SIZE + if self.with_entry { 1 } else { 0 };
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
@@ -600,9 +609,11 @@ impl Forest {
         }
         pivots
     }
-    
+
+    // 将段内的极点进行中枢划分
     fn find_pivots(&self, poles: &[Pole], start: usize, end: usize) -> Vec<Pivot> {
         let mut pivots : Vec<Pivot> = Vec::new();
+        // 如果设置进入段，那中枢区间划分从第二笔开始，否则直接从第一笔开始
         let mut i = start + if self.with_entry { 1 } else { 0 };
         while (i + 3) <= end {
             if let (Some(b), Some(c), Some(d), Some(e)) 
@@ -612,6 +623,7 @@ impl Forest {
                         if last.converge(d, e) { // 中枢延申
                             last.poles.push(*d);
                             last.poles.push(*e);
+                            last.check_extended();
                             false
                         } else if b.index > last.end() { // 新中枢
                             true
@@ -622,6 +634,8 @@ impl Forest {
                         true
                     };
                     if new_pivot {
+                        // 第三类买卖点可以跌破或升破中枢的高高或低低点，但是中枢扩张时后续的极点不允许
+                        // 记录下第三类买卖点帮助后面区别对待
                         let contains_3bs = !pivots.is_empty() && poles.get(i-1).unwrap().index == pivots.last().unwrap().end();
                         pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false, contains_3bs });
                     }
@@ -629,11 +643,11 @@ impl Forest {
             }
             i += 2;
         }
-        // 中枢扩展为更高级别中枢
+        // 中枢扩张为更高级别中枢检查
         let mut i = 0;
         while pivots.len() > 1 && i <= pivots.len() - 2 {
             if let (Some(prev), Some(next)) = (pivots.get(i), pivots.get(i+1)) {
-                if prev.extended(next) {
+                if prev.expand(next) {
                     pivots.get_mut(i).unwrap().extended = true;
                     pivots.get_mut(i + 1).unwrap().extended = true;
                 }
@@ -724,7 +738,7 @@ impl Forest {
         self.merged_feature_poles.clone()
     }
     
-    //最后段的临时终结点
+    //最后虚段(未完成)的临时终结点
     fn tip(&self) -> usize {
         match self.state {
             State::None => 0,
@@ -733,7 +747,7 @@ impl Forest {
     }
     
     // 特征序列具有反向顶底分型
-    fn has_feature_reverse(&mut self) -> bool {
+    fn check_feature_reverse(&mut self) -> bool {
         if self.merged_feature_poles.len() >= 4 {
             let mut poles = self.merged_feature_poles.clone();
             poles.extend_from_slice(&self.poles[self.poles.len() - 3 ..]);
@@ -775,9 +789,9 @@ pub struct Pole {
     pub index: usize,
     pub edge: Edge,
     pub value: f32,
-    pub segmented: bool,
-    pub trended: bool,
-    pub trend_upgraded: bool,
+    pub segmented: bool, // 段极点
+    pub trended: bool, // 趋势极点
+    pub trend_upgraded: bool, // 更大级别趋势极点
 }
 
 impl Pole {
@@ -834,6 +848,7 @@ impl Pole {
 
 }
 
+// 分笔器
 #[derive(Debug)]
 pub struct Tracer {
     strokes: Vec<Stroke>,
@@ -856,6 +871,10 @@ impl Tracer {
         Self { strokes, bi_mode: BiMode { tuibi: false, quekou: false} }
     }
 
+    // 根据K线及前后关系逐一扫描进行粉笔
+    // merged 为 true 表示K线包含
+    // gap 为 true 表示有缺口
+    // up 为 true 表示与前K线相比的方向向上
     fn update(&mut self, index: usize, high: f32, low: f32, up: bool, merged: bool, gap: bool) {
         if 0 == index {
             self.strokes.push(Stroke::new(index, high, low, up));
@@ -907,6 +926,7 @@ impl Tracer {
         }
 
         while self.strokes.len() > 2 {
+            // 对已经生成的不满足条件的笔进行合并处理
             let last_stroke = self.strokes.last().unwrap();
             let mut former_index = self.strokes.len() - 3;
             let last_end_index = last_stroke.end_index;
@@ -968,6 +988,8 @@ impl Tracer {
             }
         }
     }
+
+    // 获取分笔完成后的所有笔极点
     pub fn poles(&self) -> Vec<Pole> {
         let valid_strokes = self.strokes.iter()
         .skip_while(|p| !p.done())
@@ -986,15 +1008,17 @@ impl Tracer {
     }
 }
 
+// 市场行情数据
 pub struct Market<'a> {
     pub high: &'a [f32],
     pub low: &'a [f32],
     pub len: usize,
 
-    pub merged_index: Vec<i8>,
+    pub merged_index: Vec<i8>, // 合并关系
     pub tracer: Tracer,
 }
 
+// 根据合并关系获取前笔高低值
 #[inline]
 fn get_prev_value(values: &[f32], index: &Vec<i8>, i: usize, up: bool) -> f32 {
     let mut value = values[i];
@@ -1042,7 +1066,7 @@ impl Market<'_> {
         get_prev_value(self.low, &self.merged_index, i, up)
     }
 
-    // 合并K线并寻找笔顶底
+    // 使用分笔器合并K线并寻找笔顶底
     fn merge(&mut self) {
         let mut up = true;
         self.tracer
@@ -1117,6 +1141,7 @@ impl ZigzagResult {
     }
 }
 
+// 中枢划分级别，按笔、段或走势进行划分
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PivotMode {
     BI,
@@ -1155,6 +1180,8 @@ impl PivotMode {
     }
 }
 
+// 根据小级别的极值信息和中枢模式进行中枢划分和买卖信号识别
+// 根据需要从笔中枢逐步升级至段中枢和走势中枢
 fn zigzag(mut spins: Vec<Pole>, mode: PivotMode, with_signals: bool, with_entry: bool) -> ZigzagResult {
     let mut zz = ZigzagResult::new();
     let (forest, pivots, signals, intermediate) = zigzag_internal(with_signals, with_entry, &mut spins);
