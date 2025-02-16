@@ -32,8 +32,8 @@ STATE:IF(FRAC_X>10 AND FRAC_X<>100, FRAC_X, 0);
 SIG:TDXDLL2(2, HIGH, LOW, MODE+M_SIG);
 
 XX:IF(FRAC_X=-3, -1, IF(FRAC_X=3, 1, DRAWNULL)); {中阴被合并的特征极点}
-一买:SIG==-1;
-一卖:SIG==1;
+一买:SIG==1;
+一卖:SIG==-1;
 三买:SIG==3 OR SIG==23;
 三卖:SIG==-3 OR SIG==-23;
 二买:SIG==2 OR SIG==23;
