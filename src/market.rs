@@ -230,13 +230,20 @@ pub struct Forest {
      */
     poles: Vec<Pole>, 
     state: State,
+
+    with_entry: bool,
+    with_signals: bool,
     
     segmented_index: Vec<usize>,
     merged_feature_poles: Vec<Pole>, // 存放被合并的反向特征序列极值，生成新段时清空
 }
 impl Forest {
     pub fn new() -> Self {
-        Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new() }
+        Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new(), with_entry: true, with_signals: true }
+    }
+    
+    fn with(with_entry: bool, with_signals: bool) -> Self {
+        Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new(), with_entry, with_signals }
     }
 
     pub fn state(&self) -> State {
@@ -579,12 +586,13 @@ impl Forest {
         let mut pivots: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
         let tip = self.tip();
+        let min_pole_size = N_POLE_SIZE + if self.with_entry { 1 } else { 0 };
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
             if last_segmented_index == std::usize::MAX {
                 last_segmented_index = index;
             } else if pole.segmented || (tip > 0 && pole.index == tip) || index == poles.len() - 1 {
-                if (index - last_segmented_index) > N_POLE_SIZE {
+                if (index - last_segmented_index) >= min_pole_size {
                     pivots.extend(self.find_pivots(poles, last_segmented_index, index));
                 }
                 last_segmented_index = index;
@@ -595,7 +603,7 @@ impl Forest {
     
     fn find_pivots(&self, poles: &[Pole], start: usize, end: usize) -> Vec<Pivot> {
         let mut pivots : Vec<Pivot> = Vec::new();
-        let mut i = start + 1;
+        let mut i = start + if self.with_entry { 1 } else { 0 };
         while (i + 3) <= end {
             if let (Some(b), Some(c), Some(d), Some(e)) 
             = (poles.get(i), poles.get(i + 1), poles.get(i + 2), poles.get(i + 3)) {
@@ -642,7 +650,10 @@ impl Forest {
      * 4. 二三买卖点可能重合
      * 5. 考虑类二买卖点?
     */
-    fn signals(&self, poles: &[Pole], pivots: &Vec<Pivot>) -> HashMap<usize, Signal> {
+    fn signals(&self, poles: &[Pole], pivots: &Vec<Pivot>) -> Option<HashMap<usize, Signal>> {
+        if !self.with_signals {
+            return None
+        }
         let tip = self.tip();
         let mut pivot_index = 0;
         let mut segment_start = usize::MAX;
@@ -705,7 +716,7 @@ impl Forest {
                 }
             }
         }
-        signals
+        Some(signals)
     }
     
     // 返回中阴阶段被合并的 poles
@@ -1084,8 +1095,11 @@ impl Market<'_> {
         self.zigzag_with_flag(false, PivotMode::BI)
     }
 
+    pub fn zigzag(&self, mode: PivotMode, with_signals: bool, with_entry: bool) -> ZigzagResult {
+        zigzag(self.tracer.poles(), mode, with_signals, with_entry)
+    }
     pub fn zigzag_with_flag(&self, skip_signal: bool, mode: PivotMode) -> ZigzagResult {
-        zigzag(skip_signal, self.tracer.poles(), mode)
+        self.zigzag(mode, !skip_signal, true)
     }
 }
 
@@ -1141,15 +1155,15 @@ impl PivotMode {
     }
 }
 
-fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> ZigzagResult {
+fn zigzag(mut spins: Vec<Pole>, mode: PivotMode, with_signals: bool, with_entry: bool) -> ZigzagResult {
     let mut zz = ZigzagResult::new();
-    let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut spins);
+    let (forest, pivots, signals, intermediate) = zigzag_internal(with_signals, with_entry, &mut spins);
     zz.bi_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
     if mode != PivotMode::BI {
         let tip = forest.tip();
         let mut segments = spins.iter().filter(|pole| pole.segmented || (tip > 0 && pole.index == tip)).cloned().collect::<Vec<Pole>>();
         segments.iter_mut().for_each(|p| p.segmented = false);
-        let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
+        let (forest, pivots, signals, intermediate) = zigzag_internal(with_signals, with_entry, &mut segments);
         zz.duan_zigzag = Some(Zigzag { intermediate, pivots, signals, state: forest.state(), tip: forest.tip() });
         let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
         spins.iter_mut().for_each(|p| {
@@ -1164,7 +1178,7 @@ fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> ZigzagRes
             let tip = forest.tip();
             segments = segments.iter().filter(|pole| pole.segmented || (tip > 0 && pole.index == tip)).cloned().collect::<Vec<Pole>>();
             segments.iter_mut().for_each(|p| p.segmented = false);
-            let (forest, pivots, signals, intermediate) = zigzag_internal(skip_signal, &mut segments);
+            let (forest, pivots, signals, intermediate) = zigzag_internal(with_signals, with_entry, &mut segments);
             let segmented_indexes: HashSet<usize> = segments.iter().filter_map(|p| if p.segmented { Some(p.index) } else { None }).collect();
             spins.iter_mut().for_each(|p| {
                 if segmented_indexes.contains(&p.index) { 
@@ -1181,8 +1195,8 @@ fn zigzag(skip_signal: bool, mut spins: Vec<Pole>, mode: PivotMode) -> ZigzagRes
     zz
 }
 
-fn zigzag_internal(skip_signal: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Pivot>, Option<HashMap<usize, Signal>>, Vec<Pole>) {
-    let mut forest = Forest::new();
+fn zigzag_internal(with_signals: bool, with_entry: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Pivot>, Option<HashMap<usize, Signal>>, Vec<Pole>) {
+    let mut forest = Forest::with(with_entry, with_signals);
     for pole in &*spins {
         forest.step(pole);
     }
@@ -1194,7 +1208,7 @@ fn zigzag_internal(skip_signal: bool, spins: &mut Vec<Pole>) -> (Forest, Vec<Piv
         }
     }
     let pivots= forest.pivots(&*spins);
-    let signals = if skip_signal { None } else { Some(forest.signals(&*spins, &pivots)) };
+    let signals = forest.signals(&*spins, &pivots);
     
     let intermediate = forest.intermediate();
     // 处于中阴状态的极点，将其移除

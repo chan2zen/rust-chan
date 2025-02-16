@@ -36,7 +36,7 @@ type PlugInFunc = unsafe extern "C" fn(c_int, *mut c_float, *mut c_float, *mut c
  * 使用千位数值拆分，
  * bi_mode 使用千位拆分，通过位运算，默认严格笔 1，+推笔 2， +缺口突破 4，值相加组合
  * pivot mode 使用十位， x0x 表示笔, x1x 表示段, x2x 表示趋势
- * 日志使用个位，xx0 表示无日志，xx1 表示打印日志
+ * 日志使用个位，xx0 表示无日志(除2的余数为0)，xx1 表示打印日志(除2的余数为1), 大于 2 表示不设进入段
  * 
  * pole 使用百位，1xx 表示极值, 2xx 表示极点类型，笔、段端点标识(-1,1;-100,100, -200(临时段端点))
  * 或者
@@ -48,6 +48,7 @@ type PlugInFunc = unsafe extern "C" fn(c_int, *mut c_float, *mut c_float, *mut c
 struct ZigzagConfig {
     bi_mode: BiMode,
     log: bool,
+    segment_entry: bool,
     pivot_mode: PivotMode,
     pole_value_mode: bool,
     pole_edge_mode: bool,
@@ -77,12 +78,14 @@ impl ZigzagConfig {
             pole_value_mode = mode % 1000 / 100 == 1;
             pole_edge_mode = mode % 1000 / 100 == 2;
         }
-
+        
         let pivot_mode = PivotMode::new(mode);
-        let log = mode % 10 == 1;
+        let log = mode % 10 % 2 == 1;
+        let segment_entry = mode % 10 / 2 == 0;
         ZigzagConfig {
             bi_mode,
             log,
+            segment_entry,
             pivot_mode,
             pole_value_mode,
             pole_edge_mode,
@@ -101,7 +104,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
     if config.log {
         log!("\ncreate_market!({},{:?},{:?})\n", DataLen, market.high, market.low);
     }
-    let zr = market.zigzag_with_flag(!config.log, config.pivot_mode);
+    let zr = market.zigzag(config.pivot_mode, config.log, config.segment_entry);
     if config.log {
         log!("\nzr: {:?}\n", zr);
     }
@@ -145,7 +148,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
 pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let config = ZigzagConfig::new(*mode as i32, true);
     let market = Market::with_bi_mode(DataLen as usize, pfINa_high, pfINb_low, config.bi_mode);
-    let zr= market.zigzag_with_flag(!config.signal, config.pivot_mode);
+    let zr= market.zigzag(config.pivot_mode, config.signal, config.segment_entry);
 
     let zigzag = match config.pivot_mode {
         PivotMode::BI => zr.bi_zigzag.unwrap(),
