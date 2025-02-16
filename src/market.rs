@@ -593,15 +593,14 @@ impl Forest {
     pub fn pivots(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
         let mut pivots: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
-        let tip = self.tip();
         // 根据是否设置进入段，设定至少需要的极点数量
         let min_pole_size = N_POLE_SIZE + if self.with_entry { 1 } else { 0 };
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
             if last_segmented_index == std::usize::MAX {
                 last_segmented_index = index;
-            } else if pole.segmented || (tip > 0 && pole.index == tip) || index == poles.len() - 1 {
-                if (index - last_segmented_index) >= min_pole_size {
+            } else if pole.segmented || index == poles.len() - 1 {
+                if (index - last_segmented_index + 1) >= min_pole_size {
                     pivots.extend(self.find_pivots(poles, last_segmented_index, index));
                 }
                 last_segmented_index = index;
@@ -614,7 +613,7 @@ impl Forest {
     fn find_pivots(&self, poles: &[Pole], start: usize, end: usize) -> Vec<Pivot> {
         let mut pivots : Vec<Pivot> = Vec::new();
         // 如果设置进入段，那中枢区间划分从第二笔开始，否则直接从第一笔开始
-        let mut i = start + if self.with_entry { 1 } else { 0 };
+        let mut i = start + 1;
         while (i + 3) <= end {
             if let (Some(b), Some(c), Some(d), Some(e)) 
             = (poles.get(i), poles.get(i + 1), poles.get(i + 2), poles.get(i + 3)) {
@@ -637,6 +636,9 @@ impl Forest {
                         // 第三类买卖点可以跌破或升破中枢的高高或低低点，但是中枢扩张时后续的极点不允许
                         // 记录下第三类买卖点帮助后面区别对待
                         let contains_3bs = !pivots.is_empty() && poles.get(i-1).unwrap().index == pivots.last().unwrap().end();
+                        // if contains_3bs && !self.with_entry {
+                        //     pivots.last_mut().unwrap().poles.pop();
+                        // }
                         pivots.push(Pivot { poles: vec![*b, *c, *d, *e], extended: false, contains_3bs });
                     }
                 } 
@@ -668,14 +670,13 @@ impl Forest {
         if !self.with_signals {
             return None
         }
-        let tip = self.tip();
         let mut pivot_index = 0;
         let mut segment_start = usize::MAX;
         let mut segment_start_idx = usize::MAX;
         let mut signals = Signals::new();
-
+        let last_idx = poles.len() - 1;
         for (idx, pole) in poles.iter().enumerate() {
-            let segmented = pole.segmented || tip > 0 && pole.index == tip;
+            let segmented = pole.segmented || idx == last_idx;
             if segmented {
                 if segment_start != usize::MAX {
                     // 如果线段没有中枢但是笔数大于三笔，也设置一类买卖点（小级别）
