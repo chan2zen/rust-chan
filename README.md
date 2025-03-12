@@ -89,8 +89,8 @@ BIEXT:BIZG_ORIG<0,NODRAW;
 
 2、专家系统公式
 ```
-{多头买入(买开)} ENTERLONG: ZEN2.一卖;
-{多头卖出(卖平)} EXITLONG: ZEN2.一买;
+{多头买入(买开)} ENTERLONG: ZEN2.一买;
+{多头卖出(卖平)} EXITLONG: ZEN2.一卖;
 {空头卖出(卖开)} ENTERSHORT: ZEN2.三卖;
 {空头买入(买平)} EXITSHORT: ZEN2.三买;
 ```
