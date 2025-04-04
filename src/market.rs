@@ -593,13 +593,14 @@ impl Forest {
     pub fn pivots(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
         let mut pivots: Vec<Pivot> = Vec::new();
         let mut last_segmented_index = std::usize::MAX;
+        let tip = self.tip();
         // 根据是否设置进入段，设定至少需要的极点数量
         let min_pole_size = N_POLE_SIZE + if self.with_entry { 1 } else { 0 };
         for index in 0..poles.len() {
             let pole = poles.get(index).unwrap();
             if last_segmented_index == std::usize::MAX {
                 last_segmented_index = index;
-            } else if pole.segmented || index == poles.len() - 1 {
+            } else if pole.segmented || (tip > 0 && pole.index == tip) || index == poles.len() - 1 {
                 if (index - last_segmented_index + 1) >= min_pole_size {
                     pivots.extend(self.find_pivots(poles, last_segmented_index, index));
                 }
@@ -670,13 +671,14 @@ impl Forest {
         if !self.with_signals {
             return None
         }
+        let tip = self.tip();
         let mut pivot_index = 0;
         let mut segment_start = usize::MAX;
         let mut segment_start_idx = usize::MAX;
         let mut signals = Signals::new();
-        let last_idx = poles.len() - 1;
+
         for (idx, pole) in poles.iter().enumerate() {
-            let segmented = pole.segmented || idx == last_idx;
+            let segmented = pole.segmented || tip > 0 && pole.index == tip;
             if segmented {
                 if segment_start != usize::MAX {
                     // 如果线段没有中枢但是笔数大于三笔，也设置一类买卖点（小级别）
@@ -1016,6 +1018,7 @@ pub struct Market<'a> {
     pub len: usize,
 
     pub merged_index: Vec<i8>, // 合并关系
+    pub fx_indexes: HashMap<usize, i8>, // 顶底分型位置
     pub tracer: Tracer,
 }
 
@@ -1049,9 +1052,31 @@ impl Market<'_> {
             len,
             merged_index: vec![-1; len],
             tracer: Tracer::with_bi_mode(len / 7, bi_mode),
+            fx_indexes: HashMap::new(),
         };
 
         result.merge();
+        let mhigh = result.high;
+        let mlow = result.low;
+        let merged_index = &result.merged_index;
+        for s in result.tracer.strokes.iter_mut() {
+            if s.index == 0 { continue }
+            if s.up {
+                let limit = get_prev_value(mhigh, merged_index, s.index - 1, !s.up);
+                if s.high > limit {
+                    if let Some(v) = result.fx_indexes.get(&s.index) {
+                        result.fx_indexes.insert(s.index, v * 2);
+                    }
+                }
+            } else {
+                let limit = get_prev_value(mlow, merged_index,s.index - 1, !s.up);
+                if s.low < limit {
+                    if let Some(v) = result.fx_indexes.get(&s.index) {
+                        result.fx_indexes.insert(s.index, v * 2);
+                    }
+                }
+            }
+        }
         result
     }
 
@@ -1085,11 +1110,17 @@ impl Market<'_> {
             ) {
                 (std::cmp::Ordering::Greater, std::cmp::Ordering::Greater) => {
                     // 上升
+                    if !up {
+                        self.fx_indexes.insert(i - 1, -1);
+                    }
                     up = true;
                     gap = curr_low > prev_high;
                 }
                 (std::cmp::Ordering::Less, std::cmp::Ordering::Less) => {
                     // 下降
+                    if up {
+                        self.fx_indexes.insert(i - 1, 1);
+                    }
                     up = false;
                     gap = curr_high < prev_low;
                 }
@@ -1229,7 +1260,6 @@ fn zigzag_internal(with_signals: bool, with_entry: bool, spins: &mut Vec<Pole>) 
         forest.step(pole);
     }
     let indexes = forest.indexes();
-    let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
     for pole in spins.as_mut_slice() {
         if indexes.contains(&pole.index) {
             (*pole).segmented = true;
@@ -1239,6 +1269,8 @@ fn zigzag_internal(with_signals: bool, with_entry: bool, spins: &mut Vec<Pole>) 
     let signals = forest.signals(&*spins, &pivots);
     
     let intermediate = forest.intermediate();
+    /*
+    let last_segmented_index = indexes.iter().max().unwrap_or_else(|| &0);
     // 处于中阴状态的极点，将其移除
     spins.retain(|&pole | {
         // let retain = 
@@ -1247,6 +1279,7 @@ fn zigzag_internal(with_signals: bool, with_entry: bool, spins: &mut Vec<Pole>) 
         // println!("{:?} {:?}", pole, retain);
         // retain
     });
+    */
     (forest, pivots, signals, intermediate)
 }
 
@@ -1258,4 +1291,18 @@ pub struct Zigzag {
     pub signals: Option<Signals>,
     pub state: State,
     pub tip: usize, // 最后段的临时终结点
+}
+
+pub struct PivotFinder {}
+
+impl PivotFinder {
+    pub fn new() -> Self {
+        PivotFinder {}
+    }
+    pub fn find(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
+        if poles.len() <= N_POLE_SIZE { return Vec::new() };
+        
+        let pivots = vec![];
+        pivots
+    }
 }

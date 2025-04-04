@@ -13,7 +13,8 @@ macro_rules! create_market {
 fn to_poles(pole_values: &[f32]) -> Vec<Pole> {
     let mut poles = Vec::with_capacity(pole_values.len());
     let mut edge = Edge::TROUGH;
-    for i in 0..pole_values.len() {
+    for i in 1..=pole_values.len() {
+        let i = i-1;
         if i == 0 && pole_values[i] > pole_values[i + 1] {
             edge = Edge::PEAK;
         }

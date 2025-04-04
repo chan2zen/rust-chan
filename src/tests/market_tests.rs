@@ -136,7 +136,7 @@ fn test_average_idx() {
 #[test]
 fn pivot_jcqd_weekly() {
     let market = include!("demo.rs");
-    let zigzag = market.zigzag_with_flag(false, PivotMode::TREND);
+    let zigzag = market.zigzag_with_flag(false, PivotMode::DUAN);
     let zz = zigzag.bi_zigzag.unwrap();
     println!("pivots: {:?}", zz.pivots);
     println!("signals: {:?}", zz.signals);
@@ -156,4 +156,5 @@ fn sample() {
 
     let zigzag = market.zigzag_with_flag(true, PivotMode::BI);
     println!("Zigzag: {:?}", zigzag);
+    println!("market: {:?}", market.fx_indexes);
 }

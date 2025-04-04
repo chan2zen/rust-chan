@@ -14,7 +14,7 @@ copy .\target\i686-pc-windows-msvc\release\zen_stock.dll C:\tdx\T0002\dlls
 1、 缠论端点和买卖点公式，命名为 ZEN2
 ```
 BI_QK:=0; {是否缺口突破成笔, 1-是，0-否}
-PIVOT:=0; {0 - 笔中枢, 1 - 段中枢, 2 - 走势中枢}
+PIVOT:=1; {0 - 笔中枢, 1 - 段中枢, 2 - 走势中枢}
 MODE:=(1+BI_QK*4) * 1000 + PIVOT * 10;
 M_VALUE:=100; {获取转折点极值，端点最大最小值}
 M_EDGE:=200; {获取转折点类型，笔、段、走势高低点}
@@ -130,7 +130,35 @@ DRAWICON(ZEN2.笔背离, IF(FRAC=-1,H, L), 31);
 DRAWICON(ZEN2.段背离, IF(DUAN1=-1,H, L), 32);
 DRAWICON(ZEN2.背驰, IF(FRAC=-1,H,L), 8);
 ```
-4、选股公式，周期内最近7天有2买
+4、采用强弱顶底分型作为笔和线段主图指标
+```
+MERGE:=0;
+LEAP:=0;
+BI_QK:=0; {是否缺口突破成笔}
+PIVOT:=0; {0 - 笔中枢, 1 - 段中枢, 2 - 走势中枢}
+MODE:=(1+BI_QK*4) * 1000 + PIVOT * 10;
+M_VALUE:=100; {获取转折点极值，端点最大最小值}
+M_EDGE:=200; {获取转折点类型，笔、段、走势高低点}
+M_FX:=500; {分型}
+M_SIG:=400; {买卖信号}
+M_ZG:=200; {中枢高}
+M_ZD:=300; {中枢低，如果出现中枢扩张，返回负值}
+M_ZP:=100; {中枢起始位置, 返回 -2 和 2}
+POLE_VALUE:=TDXDLL2(1, HIGH, LOW, MODE+M_VALUE),NODRAW;
+FXX:TDXDLL2(2, HIGH, LOW, MODE+M_FX),NODRAW;
+FX:=IF(FXX==-1 OR FXX==-2, -1, IF(FXX==1 OR FXX==2, 1, 0)),NODRAW;
+FB:=TFILTER(FXX==-2, FXX==2, 1),NODRAW;
+FS:=TFILTER(FXX==-2, FXX==2, 2),NODRAW;
+DRAWLINE(FX==-1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,L),FX==+1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,H),0), LINETHICK1, COLORRED;
+DRAWLINE(FX==1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,H),FX==-1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,L),0), LINETHICK1, COLORRED;
+
+DRAWLINE(FB==1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,L),FS==+1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,H),0), LINETHICK2, COLORRED;
+DRAWLINE(FS==1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,H),FB==1,IF(POLE_VALUE<>DRAWNULL,POLE_VALUE,L),0), LINETHICK2, COLORRED;
+
+DRAWICON(FXX==2, L, 8);
+DRAWICON(FXX==-2, H, 7);
+```
+5、选股公式，周期内最近7天有2买
 ```
 N=7;
 B1B:=BARSLAST(ZEN2.SIG=1);

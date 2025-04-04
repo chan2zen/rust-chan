@@ -40,6 +40,7 @@ type PlugInFunc = unsafe extern "C" fn(c_int, *mut c_float, *mut c_float, *mut c
  * 
  * pole 使用百位，1xx 表示极值, 2xx 表示极点类型，笔、段端点标识(-1,1;-100,100, -200(临时段端点))
  * 或者
+ * mode=5, 小顶底，-1/1, 强顶底,-2/2
  * mode=4, 买卖点，4xx 表示买卖点
  * mode=2，中枢高, 2xx 表示中枢高
  * mode=3，中枢低, 如果中枢扩展，为负值; 3xx 表示中枢低
@@ -56,6 +57,7 @@ struct ZigzagConfig {
     signal: bool,
     zg: bool,
     zd: bool,
+    fx: bool, // 小顶底
     pivot_position: bool,
 }
 
@@ -65,18 +67,21 @@ impl ZigzagConfig {
 
         let mut zd = false;
         let mut zg = false;
+        let mut fx = false;
         let mut signal = false;
         let mut pivot_position = false;
         let mut pole_value_mode = false;
         let mut pole_edge_mode = false;
+        let mode_value = mode % 1000 / 100;
         if pivot {
-            signal = mode % 1000 / 100 == 4;
-            zd = mode % 1000 / 100 == 3;
-            zg = mode % 1000 / 100 == 2;
-            pivot_position = mode % 1000 / 100 == 1;
+            signal = mode_value == 4;
+            zd = mode_value == 3;
+            zg = mode_value == 2;
+            pivot_position = mode_value == 1;
+            fx = mode_value == 5;
         } else {
-            pole_value_mode = mode % 1000 / 100 == 1;
-            pole_edge_mode = mode % 1000 / 100 == 2;
+            pole_value_mode = mode_value == 1;
+            pole_edge_mode = mode_value == 2;
         }
         
         let pivot_mode = PivotMode::new(mode);
@@ -93,6 +98,7 @@ impl ZigzagConfig {
             zg,
             zd,
             pivot_position,
+            fx,
         }
     }
 }
@@ -131,7 +137,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
 
         *pfOUT.offset(pole.index as isize) = value;
     }
-    if config.pole_edge_mode { // 将最后分段的 state 写入最后一个极点前
+    if config.pivot_mode == PivotMode::BI && config.pole_edge_mode { // 将最后分段的 state 写入最后一个极点前
         for pole in &zigzag.intermediate {
             *pfOUT.offset(pole.index as isize) = pole.edge as isize as c_float * 3.;
         }
@@ -148,6 +154,12 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
 pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
     let config = ZigzagConfig::new(*mode as i32, true);
     let market = Market::with_bi_mode(DataLen as usize, pfINa_high, pfINb_low, config.bi_mode);
+    if config.fx {
+        for (k, v) in market.fx_indexes.iter() {
+            *pfOUT.offset(*k as isize) = *v as c_float;
+        }
+        return;
+    }
     let zr= market.zigzag(config.pivot_mode, config.signal, config.segment_entry);
 
     let zigzag = match config.pivot_mode {
@@ -196,6 +208,7 @@ static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 3] = [
 ];
 
 #[no_mangle]
+#[allow(static_mut_refs)]
 pub unsafe extern "C" fn RegisterTdxFunc(pFun: *mut *mut PluginTCalcFuncInfo) -> c_int {
     if (*pFun).is_null() {
         *pFun = G_CALC_FUNC_SETS.as_mut_ptr();
