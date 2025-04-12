@@ -134,7 +134,7 @@ fn test_average_idx() {
 }
 
 #[test]
-fn pivot_jcqd_weekly() {
+fn pivot_demo() {
     let market = include!("demo.rs");
     let zigzag = market.zigzag_with_flag(false, PivotMode::DUAN);
     let zz = zigzag.bi_zigzag.unwrap();
@@ -157,4 +157,28 @@ fn sample() {
     let zigzag = market.zigzag_with_flag(true, PivotMode::BI);
     println!("Zigzag: {:?}", zigzag);
     println!("market: {:?}", market.fx_indexes);
+}
+
+#[test]
+fn test_second_high_bi() {
+    let mut high = [28.52, 24.73, 27.23, 29.26, 31.01, 31.91, 32.1, 32.72, 31.76, 29.9, 30.79, 37.67, 38.52, 36.33, 36.32, 35.37, 34.16, 36.45, 36.88, 35.09, 32.13, 44.9, 52.99, 49.04, 46.18, 48.18, 52.18, 51.5, 44.17, 35.74, 37.3, 40.92, 35.5, 34.05, 30.97, 32.37, 31.28, 30.3];
+    let mut low = [22.84, 19.82, 22.91, 26.43, 26.33, 25.02, 27.39, 28.63, 28.42, 26.37, 27.07, 30.0, 32.98, 30.89, 32.85, 30.74, 31.71, 30.0, 33.5, 29.59, 29.75, 30.42, 41.5, 35.08, 39.83, 40.0, 43.49, 42.02, 33.42, 29.66, 29.71, 31.96, 31.3, 30.5, 28.52, 28.82, 29.47, 22.9];
+    let market = Market::with_bi_mode(high.len(), high.as_mut_ptr(), low.as_mut_ptr(), BiMode { cigao: true, quekou: false });
+    let zigzag = market.zigzag_with_flag(true, PivotMode::BI);
+    let spins = zigzag.spins.unwrap();
+    let len = spins.len();
+    println!("Zigzag: {:?}", spins.iter().map(|p| p.value).collect::<Vec<_>>());
+    assert_eq!(5, len);
+}
+
+#[test]
+fn test_bi_mode() {
+    let mode = BiMode::new(1000);
+    assert_eq!(BiMode {cigao: false, quekou: false}, mode);
+    let mode = BiMode::new(4000);
+    assert_eq!(BiMode {cigao: false, quekou: true}, mode);
+    let mode = BiMode::new(2000);
+    assert_eq!(BiMode {cigao: true, quekou: false}, mode);
+    let mode = BiMode::new(6000);
+    assert_eq!(BiMode {cigao: true, quekou: true}, mode);
 }

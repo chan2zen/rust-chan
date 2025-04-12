@@ -14,8 +14,9 @@ copy .\target\i686-pc-windows-msvc\release\zen_stock.dll C:\tdx\T0002\dlls
 1、 缠论端点和买卖点公式，命名为 ZEN2
 ```
 BI_QK:=0; {是否缺口突破成笔, 1-是，0-否}
+CIGAO:=1;{是否次高成笔}
 PIVOT:=1; {0 - 笔中枢, 1 - 段中枢, 2 - 走势中枢}
-MODE:=(1+BI_QK*4) * 1000 + PIVOT * 10;
+MODE:=(1+BI_QK*4+CIGAO) * 1000 + PIVOT * 10;
 M_VALUE:=100; {获取转折点极值，端点最大最小值}
 M_EDGE:=200; {获取转折点类型，笔、段、走势高低点}
 M_SIG:=400; {买卖信号}
@@ -135,8 +136,9 @@ DRAWICON(ZEN2.背驰, IF(FRAC=-1,H,L), 8);
 MERGE:=0;
 LEAP:=0;
 BI_QK:=0; {是否缺口突破成笔}
+CIGAO:=1;{是否次高成笔}
 PIVOT:=0; {0 - 笔中枢, 1 - 段中枢, 2 - 走势中枢}
-MODE:=(1+BI_QK*4) * 1000 + PIVOT * 10;
+MODE:=(1+BI_QK*4+CIGAO) * 1000 + PIVOT * 10;
 M_VALUE:=100; {获取转折点极值，端点最大最小值}
 M_EDGE:=200; {获取转折点类型，笔、段、走势高低点}
 M_FX:=500; {分型}

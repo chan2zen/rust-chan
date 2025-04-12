@@ -27,6 +27,45 @@ fn test_pivot() {
 }
 
 #[test]
+fn test_pivot_empty() {
+    let finder = PivotFinder::new();
+    let samples = [1., 2.];
+    let poles = to_poles(&samples);
+    let pivots = finder.find(&poles);
+    assert!(pivots.is_empty());
+}
+
+#[test]
+fn test_pivot_3_segments_1_pivot() {
+    let finder = PivotFinder::new();
+    let samples = [1., 2., 1.5, 2.5];
+    let poles = to_poles(&samples);
+    let pivots = finder.find(&poles);
+    assert!(!pivots.is_empty());
+    assert_eq!(1.5, pivots[0].low());
+    assert_eq!(2.0, pivots[0].high());
+}
+
+#[test]
+fn test_pivot_3_segments_0_pivot() {
+    let finder = PivotFinder::new();
+    let samples = [1., 2., 0.5, 0.8];
+    let poles = to_poles(&samples);
+    let pivots = finder.find(&poles);
+    assert!(pivots.is_empty());
+}
+
+#[test]
+fn test_pivot_4_segments_1_pivot() {
+    let finder = PivotFinder::new();
+    let samples = [1., 2., 1.5, 2.5];
+    let poles = to_poles(&samples);
+    let pivots = finder.find(&poles);
+    assert!(!pivots.is_empty());
+    assert_eq!(1.5, pivots[0].low());
+    assert_eq!(2.0, pivots[0].high());
+}
+#[test]
 fn tjbfj_empty() {
     let finder = PivotFinder::new();
     let samples = [1., 2., 1.5, 2.5, 2.2, 3.0, 2.7, 3.5, 3.2];

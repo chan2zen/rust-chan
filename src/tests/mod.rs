@@ -5,7 +5,8 @@ macro_rules! create_market {
         {
             let mut high = vec![$($high_vals),*];
             let mut low = vec![$($low_vals),*];
-            Market::new($cnt, high.as_mut_ptr(), low.as_mut_ptr())
+            let len = if $cnt > 0 { $cnt } else { high.len() };
+            Market::new(len, high.as_mut_ptr(), low.as_mut_ptr())
         }
     };
 }

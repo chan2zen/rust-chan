@@ -13,16 +13,16 @@ pub struct Stroke {
     pub end_index: usize,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BiMode {
-    pub tuibi: bool, // 推笔，顶底分型不允许包含
+    pub cigao: bool, // 次高成笔
     pub quekou: bool, // 缺口突破直接成笔
 }
 impl BiMode {
     pub(crate) fn new(mode: i32) -> Self {
-        let tuibi = mode / 1000 & 2 == 2;
+        let cigao = mode / 1000 & 2 == 2;
         let quekou = mode / 1000 & 4 == 4;
-        Self { tuibi, quekou }
+        Self { cigao, quekou }
     }
 }
 
@@ -772,7 +772,7 @@ impl Forest {
         }
         false
     }
-
+    
 }
 #[derive(Debug, PartialEq, Eq,Clone, Copy)]
 pub enum Signal {
@@ -862,7 +862,7 @@ impl Tracer {
     pub fn new(capacity: usize) -> Self {
         Self {
             strokes: Vec::with_capacity(capacity),
-            bi_mode: BiMode { tuibi: false, quekou: false},
+            bi_mode: BiMode { cigao: false, quekou: false},
         }
     }
 
@@ -871,7 +871,7 @@ impl Tracer {
     }
 
     pub fn with(strokes: Vec<Stroke>) -> Self {
-        Self { strokes, bi_mode: BiMode { tuibi: false, quekou: false} }
+        Self { strokes, bi_mode: BiMode { cigao: false, quekou: false} }
     }
 
     // 根据K线及前后关系逐一扫描进行粉笔
@@ -942,12 +942,24 @@ impl Tracer {
                 let previous = self.strokes.get(former_index + 1).unwrap();
                 let broken = (up && last_stroke.high >= former.high)
                     || (!up && last_stroke.low <= former.low);
+                count += former.count + previous.count - 2;
                 if !broken {
-                    // 如果没有顺向突破则无需检查
+                    // 是否次高点成笔
+                    if self.bi_mode.cigao && !previous.done() && !former.done() {
+                        let former = self.strokes.get_mut(former_index).unwrap();
+                        if up {
+                            former.high = high;
+                        } else {
+                            former.low = low;
+                        }
+                        former.end_index = last_end_index;
+                        former.count = count;
+                        self.strokes.drain(former_index + 1..former_index +3);    
+                    }
+
                     return;
                 }
                 let right_include = up && previous.low <= former.low || !up && previous.high >= former.high;
-                count += former.count + previous.count - 2;
                 if !previous.done() || !former.done() {
                     if right_include {
                         // former 笔被 previous 笔包含了，将 former+previous 笔合并到 former 前的笔
@@ -1094,9 +1106,19 @@ impl Market<'_> {
 
     // 使用分笔器合并K线并寻找笔顶底
     fn merge(&mut self) {
+        let init_high = self.high[0];
+        let init_low = self.low[0];
         let mut up = true;
+        for i in 1..self.len {
+            if self.high[i] > init_high && self.low[i] > init_low {
+                break;
+            } else if self.high[i] < init_high && self.low[i] < init_low {
+                up = false;
+                break;
+            }
+        }
         self.tracer
-            .update(0, self.high[0], self.low[0], true, false, false);
+            .update(0, self.high[0], self.low[0], up, false, false);
         for i in 1..self.len {
             let mut curr_high = self.high[i];
             let mut curr_low = self.low[i];
@@ -1300,9 +1322,34 @@ impl PivotFinder {
         PivotFinder {}
     }
     pub fn find(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
-        if poles.len() <= N_POLE_SIZE { return Vec::new() };
+        if poles.len() < N_POLE_SIZE { return Vec::new() };
         
-        let pivots = vec![];
+        let mut pivots = vec![];
+        let mut i = 0;
+        let end = poles.len()-3;
+        let mut start_pole = None;
+        let mut end_pole = None;
+        while i < end {
+            if let (Some(a), Some(b), Some(c), Some(d)) = (poles.get(i), poles.get(i+1), poles.get(i+2), poles.get(i+3)) {
+                if !d.has_gap(a.value) {
+                    if start_pole.is_none() {
+                        start_pole = Some(*a);
+                    }
+                    if end_pole.is_none() {
+                        end_pole = Some(*d);
+                    }
+                    let new_pivot = if let Some(_last) = pivots.last_mut() {
+                        false
+                    } else {
+                        true
+                    };
+                    if new_pivot {
+                        pivots.push(Pivot { poles: vec![*a, *b, *c, *d], extended: false, contains_3bs: false});
+                    }
+                }
+            }
+            i += 1;
+        }
         pivots
     }
 }
