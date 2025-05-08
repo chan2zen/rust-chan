@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 pub const STEPS: usize = 5;
 #[derive(Debug)]
@@ -179,11 +179,23 @@ impl Pivot {
         self.poles[self.poles.len() - 1].index
     }
 
+    pub fn pre_end(&self) -> usize {
+        self.poles[self.poles.len() - 2].index
+    }
+
     // 回落笔的 pole 极值，是否在中枢内
     pub fn converge(&self, d: &Pole, e: &Pole) -> bool {
         match e.edge {
             Edge::TROUGH => e.value <= self.high() && d.value >= self.low(),
             Edge::PEAK => e.value >= self.low() && d.value <= self.high(),
+        }
+    }
+    
+    // 回落笔的 pole 极值，是否反穿中枢
+    pub fn reverse(&self, d: &Pole, e: &Pole) -> bool {
+        match e.edge {
+            Edge::TROUGH => e.value < self.low() && d.value >= self.low(),
+            Edge::PEAK => e.value > self.high() && d.value <= self.high(),
         }
     }
 
@@ -220,9 +232,16 @@ impl Pivot {
         self.poles[self.poles.len() - 1].edge
     }
     
-    fn check_extended(&mut self) {
+    pub fn check_extended(&mut self) {
         if !self.extended && self.poles.len() >= N_POLE_SIZE * 3 - 2 {
             self.extended = true;
+        }
+    }
+    
+    fn forward(&self, f: &Pole) -> bool {
+        match self.last_edge() {
+            Edge::PEAK => f.edge == Edge::PEAK && f.value > self.highest(true),
+            Edge::TROUGH => f.edge == Edge::TROUGH && f.value < self.lowest(true),
         }
     }
 }
@@ -249,7 +268,7 @@ impl Forest {
         Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new(), with_entry: true, with_signals: true }
     }
     
-    fn with(with_entry: bool, with_signals: bool) -> Self {
+    pub fn with(with_entry: bool, with_signals: bool) -> Self {
         Self { poles: Vec::with_capacity(10), state: State::None, segmented_index: Vec::new(), merged_feature_poles: Vec::new(), with_entry, with_signals }
     }
 
@@ -737,7 +756,7 @@ impl Forest {
     }
     
     // 返回中阴阶段被合并的 poles
-    fn intermediate(&self) -> Vec<Pole> {
+    pub fn intermediate(&self) -> Vec<Pole> {
         self.merged_feature_poles.clone()
     }
     
@@ -847,6 +866,17 @@ impl Pole {
             Edge::PEAK => Signal::SELL2,
             Edge::TROUGH => Signal::BUY2,
         }
+    }
+    
+    // 继续新低或新高
+    fn forward(&self, prev_pole: &Pole) -> bool {
+        if self.edge != prev_pole.edge {
+            return false;
+        }
+        match self.edge {
+            Edge::PEAK => self.value > prev_pole.value,
+            Edge::TROUGH => self.value < prev_pole.value,
+        }        
     }
 
 }
@@ -1179,6 +1209,23 @@ impl Market<'_> {
     pub fn zigzag_with_flag(&self, skip_signal: bool, mode: PivotMode) -> ZigzagResult {
         self.zigzag(mode, !skip_signal, true)
     }
+    
+    pub(crate) fn stain_duan(&self, poles: &mut Vec<Pole>) {
+        let mut forest = Forest::with(false, false);
+        for pole in poles.as_slice() {
+            forest.step(pole);
+        }
+        let indexes = forest.indexes();
+        for pole in poles.as_mut_slice() {
+            if indexes.contains(&pole.index) {
+                (*pole).segmented = true;
+            }
+        }
+        let tip = forest.tip();
+        poles.retain(|&pole | {
+            pole.segmented || (tip > 0 && pole.index == tip)
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -1315,41 +1362,198 @@ pub struct Zigzag {
     pub tip: usize, // 最后段的临时终结点
 }
 
+#[derive(Debug)]
+pub enum Status {
+    None,
+    A0,
+    PIVOT,
+}
+
+#[derive(Debug)]
+pub struct Entry {
+    pub entry: Vec<Rc<Pole>>,
+    pub pivot: Option<Pivot>,
+    pub signals: Option<Signals>,
+}
+
+impl Entry {
+    fn new() -> Self {
+        Entry { entry: Vec::new(), pivot: None, signals: None }
+    }
+    
+    fn add_segment(&mut self, a: &Pole, b: &Pole) {
+        self.entry.push(Rc::new(a.clone()));
+        self.entry.push(Rc::new(b.clone()));
+    }
+    
+    fn set_pivot(&mut self, pivot: Pivot) {
+        self.pivot = Some(pivot);
+    }
+    
+    fn add_signal(&mut self, index: usize, signal: Signal) {
+        let signals = self.signals.get_or_insert(HashMap::new());
+        signals.insert(index, signal);
+    }
+    
+    fn pop_last_pivot_pole(&mut self) {
+        if let Some(pivot) = self.pivot.as_mut() {
+            pivot.poles.pop();
+        }
+    }
+    
+    fn add_pivot_pole(&mut self, pole: &Pole) {
+        if let Some(pivot) = self.pivot.as_mut() {
+            pivot.poles.push(pole.clone());
+        }
+    }
+}
+
 pub struct PivotFinder {}
 
 impl PivotFinder {
     pub fn new() -> Self {
         PivotFinder {}
     }
-    pub fn find(&self, poles: &Vec<Pole>) -> Vec<Pivot> {
+    pub fn find(&self, poles: &Vec<Pole>) -> Vec<Entry> {
         if poles.len() < N_POLE_SIZE { return Vec::new() };
         
-        let mut pivots = vec![];
+        let mut entries = Vec::new();
+
         let mut i = 0;
-        let end = poles.len()-3;
-        let mut start_pole = None;
-        let mut end_pole = None;
-        while i < end {
-            if let (Some(a), Some(b), Some(c), Some(d)) = (poles.get(i), poles.get(i+1), poles.get(i+2), poles.get(i+3)) {
-                if !d.has_gap(a.value) {
-                    if start_pole.is_none() {
-                        start_pole = Some(*a);
-                    }
-                    if end_pole.is_none() {
-                        end_pole = Some(*d);
-                    }
-                    let new_pivot = if let Some(_last) = pivots.last_mut() {
-                        false
+        let mut status = Status::None;
+
+        while i < poles.len() {
+            match status {
+                Status::None => {
+                    if let (Some(a), Some(b), Some(d)) = (poles.get(i), poles.get(i + 1), poles.get(i + 3)) {
+                        if !d.has_gap(a.value) {
+                            let mut a0 = Entry::new();
+                            a0.add_segment(a, b);
+                            entries.push(a0);
+                            status = Status::A0;
+                        }
                     } else {
-                        true
-                    };
-                    if new_pivot {
-                        pivots.push(Pivot { poles: vec![*a, *b, *c, *d], extended: false, contains_3bs: false});
+                        break;
                     }
-                }
+                },
+                Status::A0 => {
+                    if let (Some(a), Some(b), Some(c)) = (poles.get(i), poles.get(i + 1), poles.get(i + 2)) {
+                        let a0 = entries.last_mut().unwrap();
+                        if let Some(d) = poles.get(i + 3) {
+                            if d.has_gap(a.value) {
+                                a0.add_segment(b, c);
+                                i += 1;
+                            } else {
+                                if let Some(e) = poles.get(i + 4) {
+                                    if e.has_gap(b.value) { // 反向 a0
+                                        a0.add_segment(b, c);
+                                        let mut a0 = Entry::new();
+                                        a0.add_segment(c, d);
+                                        entries.push(a0);
+                                    } else { // 中枢
+                                        let pivot = Pivot {
+                                            poles: vec![a.clone(), b.clone(), c.clone(), d.clone()],
+                                            extended: false,
+                                            contains_3bs: false,
+                                        };
+                                        a0.set_pivot(pivot);
+                                        status = Status::PIVOT;
+                                    }
+                                    i += 2;
+                                }
+                            }
+                        } else if c.forward(a) {
+                            a0.add_segment(b, c);
+                            break;
+                        }
+
+                    }
+                },
+                Status::PIVOT => {
+                    if let Some(b) = poles.get(i+1) {
+                        let a0 = entries.last_mut().unwrap();
+                        let pivot = a0.pivot.as_ref().unwrap();
+                        if let Some(signal) = b.signal3_by(pivot) {
+                            a0.add_signal(b.index, signal);
+                            a0.pop_last_pivot_pole();
+                            let mut a0 = Entry::new();
+                            a0.add_segment(poles.get(i-1).unwrap(), poles.get(i).unwrap());
+                            i -= 1;
+                            entries.push(a0);
+                            status = Status::A0;
+                        } else {
+                            a0.add_pivot_pole(b);
+                        }
+                    }
+                },
             }
             i += 1;
         }
-        pivots
+        
+        mark_signals(&mut entries);
+        entries
+    }
+    
+}
+
+fn mark_signals(entries: &mut Vec<Entry>) {
+    let mut last_dd = 0.;
+    let mut last_gg = 0.;
+    let mut last_edge = None;
+    let mut bs1 = false;
+    for entry in entries.iter_mut() {
+        if bs1 || entry.entry.len() > N_POLE_SIZE {
+            let index = entry.entry.last().unwrap().index;
+            let signal = if bs1 {
+                if last_edge.unwrap() == Edge::PEAK { Signal::BUY1 } else { Signal::SELL1 }
+            } else {
+                if entry.entry.last().unwrap().edge == Edge::PEAK { Signal::BUY1 } else { Signal::SELL1 }
+            };
+            entry.add_signal(index, signal);
+            bs1 = false;
+        }
+        let mut signals: Option<Signals> = None;
+        if let Some(pivot) = entry.pivot.as_mut() {
+            let pivot_last_edge = pivot.last_edge();
+            pivot.check_extended();
+            let entry_len = entry.entry.len();
+            if entry_len >= N_POLE_SIZE {
+                if let (Some(pb)
+                    , Some(a), Some(b), Some(c)) 
+                    = (entry.entry.get(entry_len - 2)
+                    , pivot.poles.get(0), pivot.poles.get(1), pivot.poles.get(2)) {
+                    if b.has_gap(pb.value) && c.forward(a) {
+                        let (bs1, bs3) = if c.edge == Edge::TROUGH { 
+                            (Signal::BUY1, Signal::SELL3)
+                        } else {
+                            (Signal::SELL1, Signal::BUY3)
+                        };
+                        let signals = signals.get_or_insert_default();
+                        signals.insert(c.index, bs1);
+                        signals.insert(b.index, bs3);
+                    }
+                }
+            }
+
+            if let Some(edge) = last_edge {
+                if pivot_last_edge == edge 
+                    && (pivot.highest(true) < last_dd || pivot.lowest(true) > last_gg) {
+                    bs1 = true;                        
+                } else {
+                    last_edge = Some(pivot.last_edge());
+                    last_gg = pivot.highest(true);
+                    last_dd = pivot.lowest(true);
+                }
+            } else {
+                last_edge = Some(pivot_last_edge);
+                last_gg = pivot.highest(true);
+                last_dd = pivot.lowest(true);
+            }
+        }
+        if let Some(signals) = signals {
+            for (index, signal) in signals {
+                entry.add_signal(index, signal);
+            }
+        }
     }
 }

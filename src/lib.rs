@@ -3,7 +3,7 @@ mod market;
 
 use std::os::raw::{c_int, c_float, c_ushort};
 
-use market::{BiMode, Market, PivotMode};
+use market::{BiMode, Market, PivotFinder, PivotMode};
 
 #[cfg(test)]
 mod tests;
@@ -192,7 +192,47 @@ pub unsafe extern "C" fn pivot(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: 
         } 
     }
 }
-static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 3] = [
+
+pub unsafe extern "C" fn pivot_new(DataLen: c_int, pfOUT: *mut c_float, pfINa_high: *mut c_float, pfINb_low: *mut c_float, mode: *mut c_float) {
+    let config = ZigzagConfig::new(*mode as i32, true);
+    let market = Market::with_bi_mode(DataLen as usize, pfINa_high, pfINb_low, config.bi_mode);
+    let mut poles = market.tracer.poles();
+    if config.pivot_mode == PivotMode::DUAN {
+        market.stain_duan(&mut poles);
+    }
+    let finder = PivotFinder::new();
+    let entries = finder.find(&poles);
+    for entry in entries {
+        if config.signal {
+            if let Some(signals) = entry.signals {
+                for (index, signal) in signals.iter() {
+                    *pfOUT.offset(*index as isize) = *signal as i32 as c_float;
+                }
+            }
+            continue;
+        }        
+        if let Some(pivot) = entry.pivot {
+            if config.zg {
+                for i in pivot.start()..=pivot.end() {
+                    *pfOUT.offset(i as isize) = pivot.high() as c_float * if pivot.extended { -1. } else { 1. };
+                }
+            } else if config.zd {
+                for i in pivot.start()..=pivot.end() {
+                    *pfOUT.offset(i as isize) = pivot.low() as c_float * if pivot.extended { -1. } else { 1. };
+                }
+            } else if config.pivot_position {
+                *pfOUT.offset(pivot.start() as isize) = -2.;
+                *pfOUT.offset(pivot.end() as isize) = 2.;
+            } 
+        }
+    }
+}
+    
+static mut G_CALC_FUNC_SETS: [PluginTCalcFuncInfo; 4] = [
+    PluginTCalcFuncInfo {
+        nFuncMark: 3,
+        pCallFunc: Some(pivot_new),
+    },
     PluginTCalcFuncInfo {
         nFuncMark: 2,
         pCallFunc: Some(pivot),

@@ -11,6 +11,17 @@ macro_rules! create_market {
     };
 }
 
+macro_rules! create_market_with_bimode {
+    ($cnt:expr, $bimode:expr, [$($high_vals:expr),*], [$($low_vals:expr),*]) => {
+        {
+            let mut high = vec![$($high_vals),*];
+            let mut low = vec![$($low_vals),*];
+            let len = if $cnt > 0 { $cnt } else { high.len() };
+            Market::with_bi_mode(len, high.as_mut_ptr(), low.as_mut_ptr(), $bimode)
+        }
+    };
+}
+
 fn to_poles(pole_values: &[f32]) -> Vec<Pole> {
     let mut poles = Vec::with_capacity(pole_values.len());
     let mut edge = Edge::TROUGH;

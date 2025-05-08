@@ -6,9 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+encoding = "0.2"
 
 [lib]
 crate-type = ["cdylib"]
+
+[[example]]
+name = "zen_picker"
+crate-type = ["cdylib"]
+path="src/picker.rs"
 
 [profile.release]
 lto = true

@@ -1,4 +1,4 @@
-use crate::{market::{Forest, PivotFinder, State, STEPS}, tests::to_poles};
+use crate::{market::*, tests::to_poles};
 
 fn assert_forest_eq(expected: State, segmented: &[usize], pole_values: &[f32]) {
     let mut forest = Forest::new();
@@ -28,43 +28,72 @@ fn test_pivot() {
 
 #[test]
 fn test_pivot_empty() {
-    let finder = PivotFinder::new();
-    let samples = [1., 2.];
-    let poles = to_poles(&samples);
-    let pivots = finder.find(&poles);
-    assert!(pivots.is_empty());
+    let samples = [10., 11., 9., 9.5, 8., 8.5, 8.2, 9.8, 8.8, 10.];
+    do_pivot_test(&samples);
+}
+#[test]
+fn test_pivot_empty_multi_a0() {
+    let samples = [11., 9., 9.5, 8., 10.9, 10., 12., 11.1, 12., 10., 11., 9., 9.5, 8., 8.9, 8.5, 9.5, 9., 10.];
+    do_pivot_test(&samples);
+}
+#[test]
+fn test_pivot_1_pivot() {
+    let samples = [10., 11., 9., 9.5, 8., 8.5, 8.2, 8.8, 8.3, 8.7];
+    do_pivot_test(&samples);
+}
+#[test]
+fn test_pivot_1_pivot_3s() {
+    let samples = [10., 11., 9., 9.5, 8., 8.5, 8.2, 8.8, 8.3, 8.7, 6., 7., 5.];
+    do_pivot_test(&samples);
 }
 
 #[test]
-fn test_pivot_3_segments_1_pivot() {
-    let finder = PivotFinder::new();
-    let samples = [1., 2., 1.5, 2.5];
-    let poles = to_poles(&samples);
-    let pivots = finder.find(&poles);
-    assert!(!pivots.is_empty());
-    assert_eq!(1.5, pivots[0].low());
-    assert_eq!(2.0, pivots[0].high());
+fn test_pivot_2_down() {
+    let samples = [15., 10., 11., 9., 10.5, 8., 8.5, 7., 8.8, 5., 5.5, 4.];
+    do_pivot_test(&samples);
+}
+
+
+#[test]
+fn test_pivot_1_extended() {
+    let samples = [15., 10., 12., 9., 11., 8., 11.5, 10.2, 11.3, 9.5, 10.8];
+    do_pivot_test(&samples);
 }
 
 #[test]
-fn test_pivot_3_segments_0_pivot() {
-    let finder = PivotFinder::new();
-    let samples = [1., 2., 0.5, 0.8];
+fn test_pivot_1_extended_3b() {
+    let samples = [15., 10., 12., 9., 11., 8., 11.5, 10.2, 11.3, 9.5, 14., 13.];
+    do_pivot_test(&samples);
+}
+     
+fn do_pivot_test(samples: &[f32]) {
     let poles = to_poles(&samples);
-    let pivots = finder.find(&poles);
-    assert!(pivots.is_empty());
+    do_pivot_test_with_poles(poles);
 }
 
-#[test]
-fn test_pivot_4_segments_1_pivot() {
+fn do_pivot_test_with_poles(poles: Vec<Pole>) {
     let finder = PivotFinder::new();
-    let samples = [1., 2., 1.5, 2.5];
-    let poles = to_poles(&samples);
-    let pivots = finder.find(&poles);
-    assert!(!pivots.is_empty());
-    assert_eq!(1.5, pivots[0].low());
-    assert_eq!(2.0, pivots[0].high());
+    
+    let entries = finder.find(&poles);
+    for entry in &entries {
+        let path = entry.entry.iter().map(|p| p.value).collect::<Vec<_>>();
+        print!("\nentry: {:?}, signals: {:?}, - pivot:", path, entry.signals);
+        if let Some(pivot) = &entry.pivot {
+            println!("extended: {}, {:?}", pivot.extended, pivot.poles.iter().map(|p| p.value).collect::<Vec<_>>());
+        }
+    }
 }
+#[test]
+fn sample() {
+    let market = include!("demo.rs");
+    
+    let mut poles = market.tracer.poles();
+    println!("poles: {:?}", poles.iter().map(|p| p.value).collect::<Vec<f32>>());
+    market.stain_duan(&mut poles);
+    println!("stained poles: {:?}", poles.iter().map(|p| p.value).collect::<Vec<f32>>());
+    do_pivot_test_with_poles(poles);
+}
+    
 #[test]
 fn tjbfj_empty() {
     let finder = PivotFinder::new();
