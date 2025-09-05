@@ -775,12 +775,15 @@ impl Forest {
             poles.extend_from_slice(&self.poles[self.poles.len() - 3 ..]);
             poles.sort_by_key(|p| p.index);
             let mut f = Forest::new();
-            for p in poles {
-                f.step(&p);
+            for p in &poles {
+                f.step(p);
             }
             let indexes = f.indexes();
             if indexes.len() > 0 {
-                self.segmented_index.extend(&indexes);
+                let max = indexes.iter().max().unwrap();
+                self.segmented_index.push(poles.first().unwrap().index);
+                self.segmented_index.push(*max);
+                //self.segmented_index.extend(&indexes);
                 self.poles.clear();
                 self.poles.extend(&f.poles);
                 self.merged_feature_poles.clear();
