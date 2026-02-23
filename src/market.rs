@@ -1531,7 +1531,7 @@ fn mark_signals(entries: &mut Vec<Entry>) {
                         } else {
                             (Signal::SELL1, Signal::BUY3)
                         };
-                        let signals = signals.get_or_insert_default();
+                        let signals = signals.get_or_insert_with(HashMap::default);
                         signals.insert(c.index, bs1);
                         signals.insert(b.index, bs3);
                     }
