@@ -41,10 +41,11 @@ pub struct Vertex {
     pub index: usize,
     pub value: f32,
     pub edge: Edge,
+    pub count: usize,
 }
 impl Vertex {
     pub(crate) fn new(index: usize, edge: Edge, value: f32) -> Self {
-        Self { index, value, edge }
+        Self { index, value, edge, count: BI_COUNT }
     }
 
 }
@@ -116,6 +117,7 @@ pub trait Judger {
                     index: stroke.from,
                     value: if stroke.up { stroke.low } else { stroke.high },
                     edge: start_edge,
+                    count: stroke.count,
                 });
             }
             
@@ -125,6 +127,7 @@ pub trait Judger {
                 index: stroke.to,
                 value: if stroke.up { stroke.high } else { stroke.low },
                 edge: end_edge,
+                count: stroke.count,
             });
         }
         

@@ -71,6 +71,9 @@ pub unsafe extern "C" fn analysis(DataLen: c_int, pfOUT: *mut c_float, pfINa_fra
                 }
                 last_end = Some(tr.end());
             },
+            104.0 => { // 买卖点
+
+            },
             _ => {},
         }
     }
@@ -89,7 +92,7 @@ pub unsafe extern "C" fn zigzag(DataLen: c_int, pfOUT: *mut c_float, pfINa_high:
     for vertex in vertexes {
         segmenter.step(&vertex);
         unsafe {
-            *pfOUT.add(vertex.index) = vertex.edge.as_frac();
+            *pfOUT.add(vertex.index) = vertex.edge.as_frac() * (1.0 + vertex.count as f32 * 10.0);
         }
     }
     for idx in segmenter.indexes() {
