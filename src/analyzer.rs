@@ -8,6 +8,12 @@ pub enum Level {
 }
 */
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Signal {
+    Buy(i32, usize), // 信号，位置
+    Sell(i32, usize),
+}
+
 /// 交易区间，中枢
 #[derive(Debug, Clone)]
 pub struct TradingRange {
@@ -39,6 +45,16 @@ impl TradingRange {
 
     pub fn start(&self) -> usize {
         self.vertexes[0].index
+    }
+
+    // 中枢最后一个点是否延申方向的最高/低点
+    pub fn is_end_extended(&self) -> bool {
+        let last = self.vertexes[self.vertexes.len() - 1];
+        let first = self.vertexes[0];
+        if first.edge == last.edge {
+            (last.edge == Edge::Peak && self.vertexes.iter().all(|v| v.value <= last.value)) ||
+            last.edge == Edge::Trough && self.vertexes.iter().all(|v| v.value >= last.value)
+        } else { false }
     }
 
     pub fn end(&self) -> usize {
@@ -174,7 +190,61 @@ impl Analyzer {
         }
         trading_ranges
     }
-
+    pub fn signals(trading_ranges: &[TradingRange], vertexes: &[Vertex]) -> Vec<Signal> {
+        let mut signals = Vec::new();
+        let mut vi = 0;
+        let len = vertexes.len();
+        let mut last_tr: Option<&TradingRange> = None;
+        for tr in trading_ranges {
+            let end = tr.end();
+            while vi < len && vertexes[vi].index <= end { 
+                vi += 1;
+            }
+            if let Some(last_tr) = last_tr { 
+                if vi >= len { 
+                    if tr.is_end_extended() {
+                        vi -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let v = vertexes[vi];
+                let edge = tr.vertexes[0].edge;
+                if (last_tr.vertexes[0].edge == edge
+                    || edge == Edge::Trough && tr.get_resistance() < last_tr.get_support()
+                    || edge == Edge::Peak && tr.get_support() > last_tr.get_resistance()
+                ) && v.edge == edge { 
+                    if edge == Edge::Peak { 
+                        signals.push(Signal::Sell(1, v.index));
+                        if vi + 2 < len { 
+                            let v = vertexes[vi+2];
+                            signals.push(Signal::Sell(2, v.index));
+                        }
+                    } else {
+                        signals.push(Signal::Buy(1, v.index));
+                        if vi + 2 < len { 
+                            let v = vertexes[vi+2];
+                            signals.push(Signal::Buy(2, v.index));
+                        }
+                    }
+                }
+            }
+            vi += 1; // 第三类买卖点检查
+            if vi >= len {
+                break;
+            }
+            let v = vertexes[vi];
+            let support = tr.get_support();
+            let resistance = tr.get_resistance();
+            if v.value < support {
+                signals.push(Signal::Sell(3, v.index));
+            } else if v.value > resistance {
+                signals.push(Signal::Buy(3, v.index));
+            }            
+            last_tr = Some(tr);
+        }
+        signals
+    }
 }
 
 #[cfg(test)]
@@ -246,4 +316,19 @@ mod tests {
         // println!("{:?}", trading_ranges);
         assert_eq!(result, expected.unwrap());
     } 
+
+    #[rstest]
+    #[case::sell1(&[1.0, 2.0, 1.5, 2.5, 2.0, 4.0, 2.6, 4.5, 3.9, 5.0, 4.6, 4.7, 3.9], Some(vec![Signal::Buy(3, 30), Signal::Sell(1, 45), Signal::Sell(2, 55), Signal::Buy(3,50)]))]
+    #[case::buy1_last(&[4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2, 0.9, 1.1, 0.8], Some(vec![Signal::Sell(3,30),Signal::Buy(1, 45)]))]
+    #[case::buy1_reverse_last(&[1.0, 4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2, 0.9, 1.1, 0.8], Some(vec![Signal::Sell(3,35),Signal::Buy(1, 50)]))]
+    #[case::buy1(&[4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2, 0.9, 1.1, 0.8, 0.85, 0.81], Some(vec![Signal::Sell(3,30),Signal::Buy(1, 45), Signal::Buy(2, 55), Signal::Sell(3, 50)]))]
+    #[case::buy3(&[1.0, 2.0, 1.5, 2.5, 2.0, 4.0, 2.6], Some(vec![Signal::Buy(3, 30)]))]
+    #[case::sell3(&[4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2], Some(vec![Signal::Sell(3, 30)]))]
+    #[case::sell1_last(&[1.0, 2.0, 1.5, 2.5, 2.0, 4.0, 2.6, 4.5, 3.9, 5.0], Some(vec![Signal::Buy(3, 30), Signal::Sell(1, 45)]))]
+    fn test_analyzer_signals(#[case] vertex_values: &[f32], #[case] expected: Option<Vec<Signal>>) {
+        let vertexes = Vertex::to_vertexs(vertex_values, None);
+        let trading_ranges = Analyzer::analyze(&vertexes);
+        let signals = Analyzer::signals(&trading_ranges, &vertexes);
+        assert_eq!(signals, expected.unwrap());
+    }
 }

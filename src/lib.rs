@@ -41,6 +41,14 @@ pub unsafe extern "C" fn analysis(DataLen: c_int, pfOUT: *mut c_float, pfINa_fra
         }
     }
     let trading_ranges = analyzer::Analyzer::analyze(&vertexes);
+    if *mode == 104.0 { // 买卖点
+        let signals = analyzer::Analyzer::signals(&trading_ranges, &vertexes);
+        signals.iter().for_each(|signal| match signal {
+            analyzer::Signal::Buy(value, index) => unsafe { *pfOUT.add(*index) = *value as f32 },
+            analyzer::Signal::Sell(value, index) => unsafe { *pfOUT.add(*index) = -(*value as f32) },
+        });
+        return;
+    }
     let mut last_end = None;
     for tr in trading_ranges {
         match *mode {
@@ -70,9 +78,6 @@ pub unsafe extern "C" fn analysis(DataLen: c_int, pfOUT: *mut c_float, pfINa_fra
                     *pfOUT.add(tr.end()) = 2.0;
                 }
                 last_end = Some(tr.end());
-            },
-            104.0 => { // 买卖点
-
             },
             _ => {},
         }
