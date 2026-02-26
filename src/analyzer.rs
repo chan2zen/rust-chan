@@ -22,24 +22,25 @@ pub struct TradingRange {
 }
 impl TradingRange {
     fn has_gap(&self, e: Vertex) -> bool {
-        let a = self.vertexes[0];
-        let b = self.vertexes[1];
-        (b.edge != e.edge && e.has_gap(b.value)) || (a.edge != e.edge && e.has_gap(a.value)) 
+        match e.edge {
+            Edge::Peak => e.value < self.get_support(),
+            Edge::Trough => e.value > self.get_resistance(),
+        }
     }
 
     pub fn get_support(&self) -> f32 { 
         if self.vertexes[0].edge == Edge::Peak {
-            self.vertexes[1].value
+            self.vertexes[1].value.max(self.vertexes[3].value)
         } else {
-            self.vertexes[0].value
+            self.vertexes[0].value.max(self.vertexes[2].value)
         }
     }
 
     pub fn get_resistance(&self) -> f32 { 
         if self.vertexes[0].edge == Edge::Peak {
-            self.vertexes[0].value
+            self.vertexes[0].value.min(self.vertexes[2].value)
         } else {
-            self.vertexes[1].value
+            self.vertexes[1].value.min(self.vertexes[3].value)
         }
     }
 
@@ -88,6 +89,21 @@ impl TradingRange {
         (valid, new_vertexes)
     }
     
+    /// 扩展中枢分解，分解后左侧中枢不失效
+    fn decompose(&mut self) -> Option<Vec<Vertex>> {
+        let mut new_vertexes: Option<Vec<Vertex>> = None;
+        let leave_at = self.find_leave_at();
+        if leave_at == 0 {
+            // 反向中枢
+            self.vertexes.remove(0);
+            new_vertexes = None;
+        } else if leave_at > 3 {
+            // 尝试分解中枢
+            new_vertexes = Some(self.vertexes.drain(leave_at..).collect());
+        }
+        new_vertexes
+    }
+
     fn find_leave_at(&self) -> usize {
         let mut a = self.vertexes[0];
         let mut leave_at = 0;
@@ -100,6 +116,10 @@ impl TradingRange {
             }
         }
         leave_at
+    }
+    
+    fn need_decompose(&mut self) -> bool {
+        self.vertexes.len() >= 11
     }
 
 }
@@ -162,7 +182,18 @@ impl Analyzer {
                 Status::Range => { 
                     let e = vertexes[i];
                     if let Some(last_range) = trading_ranges.last_mut() { 
-                        if last_range.has_gap(e) { 
+                        if last_range.need_decompose() {
+                            let remains = last_range.decompose();
+                            if let Some(remains) = remains { 
+                                if e.edge != last_range.vertexes[0].edge { 
+                                    i -= 1;
+                                }
+                                status = Status::A0;
+                                i -= remains.len();
+                                continue;
+                            }
+                        } 
+                        if last_range.has_gap(e) {
                             let (valid, remains) = last_range.finish();
                             if let Some(remains) = remains { 
                                 if e.edge != last_range.vertexes[0].edge { 
@@ -210,9 +241,9 @@ impl Analyzer {
                 }
                 let v = vertexes[vi];
                 let edge = tr.vertexes[0].edge;
-                if (last_tr.vertexes[0].edge == edge
-                    || edge == Edge::Trough && tr.get_resistance() < last_tr.get_support()
-                    || edge == Edge::Peak && tr.get_support() > last_tr.get_resistance()
+                if ((edge == Edge::Trough 
+                    && tr.get_resistance() < last_tr.get_support())
+                    || (edge == Edge::Peak && tr.get_support() > last_tr.get_resistance())
                 ) && v.edge == edge { 
                     if edge == Edge::Peak { 
                         signals.push(Signal::Sell(1, v.index));
@@ -236,9 +267,9 @@ impl Analyzer {
             let v = vertexes[vi];
             let support = tr.get_support();
             let resistance = tr.get_resistance();
-            if v.value < support {
+            if v.value < support && v.edge == Edge::Peak {
                 signals.push(Signal::Sell(3, v.index));
-            } else if v.value > resistance {
+            } else if v.value > resistance && v.edge == Edge::Trough {
                 signals.push(Signal::Buy(3, v.index));
             }            
             last_tr = Some(tr);
