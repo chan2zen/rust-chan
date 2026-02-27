@@ -40,6 +40,10 @@ pub unsafe extern "C" fn analysis(DataLen: c_int, pfOUT: *mut c_float, pfINa_fra
             vertexes.push(vertex);
         }
     }
+    if *mode > 1000.0 {
+        *mode -= 1000.0;
+        log!("\n\nlet values = {:?};\n\n", vertexes.iter().map(|v| v.value).collect::<Vec<_>>());
+    }
     let trading_ranges = analyzer::Analyzer::analyze(&vertexes);
     if *mode == 104.0 { // 买卖点
         let signals = analyzer::Analyzer::signals(&trading_ranges, &vertexes);

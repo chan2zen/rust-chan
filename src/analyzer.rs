@@ -67,23 +67,22 @@ impl TradingRange {
     /// 并返回右侧剩余的顶点
     fn finish(&mut self) -> (bool, Option<Vec<Vertex>>) {
         let mut valid = true;
-        let mut new_vertexes: Option<Vec<Vertex>> = None;
         let leave_at = self.find_leave_at();
+        let new_vertexes: Option<Vec<Vertex>>;
         if leave_at == 0 {
             // 反向中枢
-            if self.vertexes.len() > 4 {
-                self.vertexes.remove(0);
-                new_vertexes = Some(vec!(self.vertexes.pop().unwrap()));
-            } else {
+            if self.vertexes.len() <= 4 {
                 // 中枢失效
                 valid = false;
             }
+            self.vertexes.remove(0);
+            new_vertexes = Some(vec!(self.vertexes.pop().unwrap()));
         } else {
             // 尝试分解中枢
-            new_vertexes = Some(self.vertexes.drain(leave_at..).collect());
-            if self.vertexes.len() < 4 {
-                // 中枢失效
-                valid = false;
+            if leave_at > 3 {
+                new_vertexes = Some(self.vertexes.drain(leave_at..).collect());
+            } else {
+                new_vertexes = Some(self.vertexes.drain(4..).collect());
             }
         }
         (valid, new_vertexes)
@@ -219,6 +218,7 @@ impl Analyzer {
                 },
             }
         }
+        trading_ranges.retain(|tr| tr.vertexes.len() >= 4);
         trading_ranges
     }
     pub fn signals(trading_ranges: &[TradingRange], vertexes: &[Vertex]) -> Vec<Signal> {
@@ -233,7 +233,7 @@ impl Analyzer {
             }
             if let Some(last_tr) = last_tr { 
                 if vi >= len { 
-                    if tr.is_end_extended() {
+                    if tr.vertexes.len() > 3 && tr.is_end_extended() {
                         vi -= 1;
                     } else {
                         break;
@@ -319,8 +319,8 @@ mod tests {
     #[rstest]
     #[case::one_extended_with_3b(&[15., 10., 12., 9., 11., 8., 11.5, 10.2, 11.3, 9.5, 14., 13., 14., 10.], Some(vec![10.0, 12.0, 9.0, 11.0, -1.0, 11.5, 10.2, 11.3, 9.5, -1.0, 14.0, 13.0, 14.0, 10.0]))]
     #[case::one_extended_with_3b_new_one(&[15., 10., 12., 9., 11., 8., 11.5, 10.2, 11.3, 9.5, 14., 13., 14., 12.5, 15.0], Some(vec![10.0, 12.0, 9.0, 11.0, -1.0, 11.5, 10.2, 11.3, 9.5, -1.0, 14.0, 13.0, 14.0, 12.5, 15.0]))]
-    #[case::up_with_3s(&[10.0, 12.0, 11.5, 12.5, 11.0, 11.6, 10.8, 11.1, 10.5], Some(vec![11.0, 11.6, 10.8, 11.1, 10.5]))]
-    #[case::none2(&[11., 9., 9.5, 8., 10.9, 10., 12., 11.1, 12., 10., 11., 9., 9.5, 8., 8.9, 8.5, 9.5, 9., 10.], None)]
+    #[case::up_with_3s(&[10.0, 12.0, 11.5, 12.5, 11.0, 11.6, 10.8, 11.1, 10.5], Some(vec![12.0, 11.5, 12.5, 11.0]))]
+    #[case::none2(&[11., 9., 9.5, 8., 10.9, 10., 12., 11.1, 12., 10., 11., 9., 9.5, 8., 8.9, 8.5, 9.5, 9., 10.], Some(vec![9.0, 9.5, 8.0, 10.9, -1.0, 12.0, 11.1, 12.0, 10.0]))]
     #[case::one_with_3s(&[10., 11., 9., 9.5, 8., 8.5, 8.2, 8.8, 8.3, 8.7, 6., 7., 5.], Some(vec![8.0, 8.5, 8.2, 8.8, 8.3, 8.7]))]
     #[case::two_down_ranges(&[15., 10., 11., 9., 10.5, 8., 8.5, 7., 8.8, 5., 5.5, 4.], Some(vec![10.0, 11.0, 9.0, 10.5, -1.0, 8.0, 8.5, 7.0, 8.8]))]
     #[case::two_down_ranges2(&[32.56, 56.23, 39.24, 41.85, 38.19, 42.90, 39.01, 41.52, 32.70, 34.77, 32.18, 35.50, 30.80, 33.68, 30.44], Some(vec![39.24, 41.85, 38.19, 42.90, 39.01, 41.52, -1.0, 32.70, 34.77, 32.18, 35.50, 30.80, 33.68, 30.44]))]
@@ -349,6 +349,7 @@ mod tests {
     } 
 
     #[rstest]
+    #[case::sample(&[2.2, -0.59, 2.35, 0.86, 17.98, 3.47, 9.06, 6.14, 9.6, 6.41, 15.07, 8.61, 18.37, 6.45, 9.68, 6.87, 14.02, 11.14, 33.72, 24.3, 83.16, 40.37, 84.36, 57.03, 73.58, 20.99, 35.07, 25.68, 65.9], None)]
     #[case::sell1(&[1.0, 2.0, 1.5, 2.5, 2.0, 4.0, 2.6, 4.5, 3.9, 5.0, 4.6, 4.7, 3.9], Some(vec![Signal::Buy(3, 30), Signal::Sell(1, 45), Signal::Sell(2, 55), Signal::Buy(3,50)]))]
     #[case::buy1_last(&[4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2, 0.9, 1.1, 0.8], Some(vec![Signal::Sell(3,30),Signal::Buy(1, 45)]))]
     #[case::buy1_reverse_last(&[1.0, 4.0, 1.5, 2.5, 2.0, 3.0, 1.0, 1.2, 0.9, 1.1, 0.8], Some(vec![Signal::Sell(3,35),Signal::Buy(1, 50)]))]
