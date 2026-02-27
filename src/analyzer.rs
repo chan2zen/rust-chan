@@ -120,7 +120,30 @@ impl TradingRange {
     fn need_decompose(&mut self) -> bool {
         self.vertexes.len() >= 11
     }
+    
+    fn independent(&self, last_tr: &TradingRange) -> bool {
+        let gg = last_tr.get_gg();
+        let dd = last_tr.get_dd();
+        let cur_gg = self.get_gg();
+        let cur_dd = self.get_dd();
+        cur_gg.min(cur_dd) > gg || cur_gg.max(cur_dd) < dd
+    }
+    
+    fn get_gg(&self) -> f32 {
+        let mut gg = self.vertexes[0].value;
+        for v in &self.vertexes {
+            gg = gg.max(v.value);
+        }
+        gg
+    }
 
+    fn get_dd(&self) -> f32 {
+        let mut dd = self.vertexes[0].value;
+        for v in &self.vertexes {
+            dd = dd.min(v.value);
+        }
+        dd
+    }
 }
 
 impl Vertex {
@@ -244,7 +267,7 @@ impl Analyzer {
                 if ((edge == Edge::Trough 
                     && tr.get_resistance() < last_tr.get_support())
                     || (edge == Edge::Peak && tr.get_support() > last_tr.get_resistance())
-                ) && v.edge == edge { 
+                ) && v.edge == edge && tr.independent(last_tr) { 
                     if edge == Edge::Peak { 
                         signals.push(Signal::Sell(1, v.index));
                         if vi + 2 < len { 
